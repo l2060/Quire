@@ -1,0 +1,44 @@
+# API 示例配置；完整多源编排模板可通过 quire-cli init 生成。
+# 相对目录以本文件所在目录为基准；索引固定存入 .asset/。
+# 可选；默认 1，目前只支持 1。
+version: 1
+# 可选；默认 ./dist；产物位于 <output>/<TagID>/<包名>.asset。
+output: ./dist
+# 可选；默认 true，启用 LZ4；false 表示不压缩。
+compression: true
+# 整段可选，字段省略时使用各自默认值。
+build:
+  # 可选；默认 128 MiB，整数范围 8–65536，须足以容纳 -jobs 所需工作缓冲。
+  memory-mib: 128
+  # 可选；默认 262144 字节；支持 65536、131072、262144、524288、1048576。
+  # 修改块大小会重新打包相关资源。
+  block-size: 262144
+# 整段可选；默认不加密。
+encryption:
+  # 可选；默认 false。true 启用 AES-256-GCM，需要非空密码。
+  enabled: false
+  # 可选；默认 QUIRE_KEY，填写变量名；-pwd/-pwd-env 可覆盖此来源。
+  # enabled=false 时忽略此字段，不需要设置环境变量。
+  key-environment: QUIRE_KEY
+# 必填；至少一个包，无默认值。
+packages:
+  # 必填；唯一包名，无默认值，允许 1–80 个 ASCII 字母、数字、连字符或下划线。
+  - name: common
+    # sources 必填且非空；本包省略 compression，继承全局 true。
+    sources:
+      # directory 必填，无默认值；打包前必须存在。
+      - directory: ./assets/common
+        # 可选；默认空字符串；支持多级目录，将 settings.txt 映射到 common/data/ 下。
+        prefix: common/data
+        # include/exclude 可选；省略时包含全部资源且没有额外排除，.assetignore 仍生效。
+  # 必填；第二个唯一包名，无默认值，对应 locale.asset。
+  - name: locale
+    # 可选；默认继承全局 true；本例覆盖为 false。
+    compression: false
+    # 必填；至少一个源目录，无默认值。
+    sources:
+      # 必填；无默认值，相对本文件的目录。
+      - directory: ./assets/locale
+        # 可选；默认空字符串；本例将 welcome.txt 映射为 strings/welcome.txt。
+        prefix: strings
+        # 省略 include/exclude，默认包含全部资源；.assetignore 仍然生效。

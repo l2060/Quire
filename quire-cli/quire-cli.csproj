@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>Quire.Cli</AssemblyName>
+		<RootNamespace>Quire.Cli</RootNamespace>
+		<PackageId>quire-cli</PackageId>
+		<PackAsTool>true</PackAsTool>
+		<OptimizationPreference>Size</OptimizationPreference>
+		<StripSymbols>true</StripSymbols>
+		<ToolCommandName>quire-cli</ToolCommandName>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+		<Description>Package assets from quire.project.yml and extract immutable asset packages.</Description>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<Title>Quire-cli</Title>
+		<PackageProjectUrl>https://github.com/l2060/Quire</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/l2060/Quire</RepositoryUrl>
+		<PackageIcon>icon.png</PackageIcon>
+	</PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="../Quire.Package/Quire.Package.csproj" />
+		<InternalsVisibleTo Include="Quire.Package.Tests" />
+		<InternalsVisibleTo Include="Quire.Package.Benchmarks" />
+		<None Include="../README.md" Pack="true" PackagePath="/" />
+		<None Include="..\icon.png">
+		  <Pack>True</Pack>
+		  <PackagePath>\</PackagePath>
+		</None>
+		<EmbeddedResource Include="Templates/quire.project.yml" LogicalName="Quire.Cli.Templates.quire.project.yml" />
+	</ItemGroup>
+	<Target Name="NameNativeExecutable" AfterTargets="CopyNativeBinary" Condition="'$(PublishAot)' == 'true'">
+		<Move SourceFiles="$(PublishDir)$(AssemblyName)$(NativeBinaryExt)" DestinationFiles="$(PublishDir)quire-cli$(NativeBinaryExt)" />
+	</Target>
+</Project>

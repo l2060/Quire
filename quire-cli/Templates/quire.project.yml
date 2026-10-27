@@ -1,0 +1,92 @@
+# 所有相对目录均以本文件所在目录为基准，不随命令执行目录变化。
+# 构建索引固定存入旁边的 .asset/，不需要也不支持配置索引目录。
+
+# 可选；默认 1，目前只支持 1。
+version: 1
+# 可选；默认 ./dist。实际产物为 <output>/<TagID>/<包名>.asset。
+# 不能包含项目根目录，也不能位于 .asset/ 内；缺少的输出目录在打包时创建。
+output: ./dist
+# 可选；默认 true。true 使用 LZ4，false 不压缩；压缩无收益的块保存原始数据。
+# 这是全局默认值，可被下面每个包的 compression 覆盖。
+compression: true
+
+# 整段可选；省略时使用下面两个字段的默认值。
+build:
+  # 可选；默认 128，单位 MiB，整数范围 8–65536。
+  # 限制构建工作缓冲预算，不包含整个资源清单和 Meta 的所有内存。
+  # 所选 -jobs 和块大小超过预算时报错；改变预算不会产生内容补丁。
+  memory-mib: 128
+  # 可选；默认 262144 字节（256 KiB）。
+  # 可选值：65536、131072、262144、524288、1048576。
+  # 影响压缩/加密块和局部读取粒度；修改后会重新打包相关资源。
+  block-size: 262144
+
+# 整段可选；省略时不加密。
+encryption:
+  # 可选；默认 false。true 启用 AES-256-GCM，需要非空密码。
+  # 仅传入 -pwd 不会自动启用加密；启用状态由本字段决定。
+  enabled: false
+  # 可选；默认环境变量名 QUIRE_KEY，本例显式改为 QUIRE_KEY.
+  # 只填写变量名，不填写密码。-pwd 或 -pwd-env 可覆盖这里的密码来源。
+  # enabled=false 时不读取此变量；enabled=true 且没有有效密码时打包失败。
+  key-environment: QUIRE_KEY
+
+# 必填；至少一个包，无默认值。同一构建的所有包共享 TagID 和打包时间。
+packages:
+  # 必填；无默认值，1–80 个 ASCII 字母、数字、连字符或下划线。
+  # 项目内包名不区分大小写且必须唯一；本项生成 common.asset。
+  - name: common
+    # 可选；省略时继承全局 compression，本例为 true。
+    compression: true
+    # 必填；至少一个源目录，无默认值。这里的两个目录合并到同一个包。
+    sources:
+      # 必填；无默认值，打包前必须存在。支持绝对目录和相对本文件的目录。
+      # 源目录可以位于项目之外，但不能位于输出目录或 .asset/ 中。
+      - directory: ./assets/common
+        # 可选；默认空字符串，即直接使用源目录中的相对文件路径。
+        # 支持 common/data 等多级目录，统一使用 /，不能包含 . 或 .. 路径段。
+        # 此例将 settings.txt 映射为 common/data/settings.txt。
+        prefix: common/data
+        # 可选；省略时包含所有资源文件。列表中任意模式匹配即包含。
+        # 模式相对本源目录，区分大小写，支持 *、?、**；建议用引号包住模式。
+        include:
+          - "**/*"
+        # 可选；省略时没有额外排除规则。排除优先于 include，.assetignore 仍生效。
+        # 列表中任意模式匹配即排除；单独排除 .meta 等价于本次没有该 Meta。
+        exclude:
+          - "**/*.tmp"
+          - "**/draft/**"
+      # 必填；第二个源目录，无默认值，目录解析规则与上面相同。
+      - directory: ./assets/shared
+        # 可选；默认空字符串。使用不同前缀可避免与第一个源目录重复映射。
+        prefix: common/shared
+        # 可选；省略时包含所有资源；这里显式包含所有层级的文件。
+        include:
+          - "**/*"
+        # 可选；省略时不额外排除；这里排除备份文件。
+        exclude:
+          - "**/*.bak"
+  # 必填；另一个唯一包名，无默认值；本项生成独立的 locale.asset。
+  - name: locale
+    # 可选；默认继承全局 true；这里显式设为 false，关闭本包压缩。
+    compression: false
+    # 必填；非空源目录列表，无默认值。
+    sources:
+      # 必填；无默认值，打包前必须存在。
+      - directory: ./assets/locale
+        # 可选；默认空字符串；这里将 welcome.txt 映射为 strings/welcome.txt。
+        prefix: strings
+        # 可选；省略时包含所有资源。
+        include:
+          - "**/*"
+        # 可选；省略时没有额外排除规则。
+        exclude:
+          - "**/*.tmp"
+
+# 同一包内重复的资源路径会报错。不同包的同一路径按加载顺序覆盖。
+# Meta 固定为 file.ext.meta，采用 property=value；没有 Meta 时省略 sidecar。
+# 空 sidecar 表示存在空 Meta；不配置 metadata.format。
+# 首次打包：quire-cli package -jobs 5
+# 增量打包：quire-cli package -base-tag TAG -jobs 5
+# 加密打包：先设置 enabled: true，再执行 quire-cli package -pwd YOUR_PASSWORD
+# 并发解包：quire-cli unpackage ./dist ./unpacked -jobs 5

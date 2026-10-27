@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+**/.vs/
+*.user
+**/.asset/
+**/dist/
+artifacts/
+*.tmp
+!examples/**/*.meta
