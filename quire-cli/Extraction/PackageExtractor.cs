@@ -10,7 +10,7 @@ internal static class PackageExtractor
     internal static int DefaultJobs => Math.Min(Environment.ProcessorCount, 8);
 
     internal static async Task<(long Assets, long MetadataFiles)> ExtractAsync(string sourceDirectory, string destinationDirectory,
-        AssetReadOptions options, CancellationToken token, int? jobs = null)
+        ReadOptions options, CancellationToken token, int? jobs = null)
     {
         token.ThrowIfCancellationRequested();
         int concurrency = jobs ?? DefaultJobs;
@@ -21,7 +21,7 @@ internal static class PackageExtractor
             throw new ArgumentException("Source and destination directories must not overlap.");
         RejectLinks(source); RejectLinks(destination);
         RequireEmpty(destination);
-        using var packages = await AssetPackageSet.OpenDirectoryAsync(source, options, token).ConfigureAwait(false);
+        using var packages = await PackageSet.OpenDirectoryAsync(source, options, token).ConfigureAwait(false);
         if (packages.Packages.Count == 0) throw new InvalidDataException($"No .asset packages found in '{source}'.");
         string parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);

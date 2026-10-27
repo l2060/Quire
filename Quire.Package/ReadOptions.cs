@@ -2,7 +2,7 @@ namespace Quire.Package;
 
 public enum AssetReadMode { RandomAccess, MemoryMapped }
 
-public sealed record AssetReadOptions
+public sealed record ReadOptions
 {
     public AssetReadMode ReadMode { get; init; } = AssetReadMode.RandomAccess;
     public string? Password { get; init; }
@@ -16,6 +16,6 @@ public sealed record AssetReadOptions
     internal void Validate()
     {
         if (!Enum.IsDefined(ReadMode) || MaxBufferedAssetBytes < 0 || MaxResidentIndexBytes < 0 || PageCacheBytes < 0 || MetadataCacheBytes < 0)
-            throw new ArgumentOutOfRangeException(nameof(AssetReadOptions), "Memory limits cannot be negative.");
+            throw new ArgumentOutOfRangeException(nameof(ReadOptions), "Memory limits cannot be negative.");
     }
 }

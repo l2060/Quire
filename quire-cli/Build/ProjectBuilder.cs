@@ -85,7 +85,7 @@ internal static class ProjectBuilder
                 outputs.Add(Path.GetRelativePath(project.Root, Path.Combine(final, filename)).Replace('\\', '/'));
             }
             // Verify the actual staged artifacts, including metadata-only records and content digests.
-            using (var packages = await AssetPackageSet.OpenDirectoryAsync(stage, new AssetReadOptions { Password = password }, token).ConfigureAwait(false))
+            using (var packages = await PackageSet.OpenDirectoryAsync(stage, new ReadOptions { Password = password }, token).ConfigureAwait(false))
                 await packages.VerifyAsync(token).ConfigureAwait(false);
             string configHash;
             await using (var configFile = File.OpenRead(project.FilePath))

@@ -81,12 +81,12 @@ internal static class CommandLine
                 : "Specify exactly one package directory.");
             if (args[0] == "unpackage")
             {
-                var result = await PackageExtractor.ExtractAsync(positional[0], positional[1], new AssetReadOptions { Password = suppliedPassword }, token,
+                var result = await PackageExtractor.ExtractAsync(positional[0], positional[1], new ReadOptions { Password = suppliedPassword }, token,
                     Number("-jobs", PackageExtractor.DefaultJobs)).ConfigureAwait(false);
                 Console.WriteLine($"Extracted {result.Assets} assets and {result.MetadataFiles} metadata files to {Path.GetFullPath(positional[1])}");
                 return 0;
             }
-            using var set = await AssetPackageSet.OpenDirectoryAsync(positional[0], new AssetReadOptions { Password = suppliedPassword }, token).ConfigureAwait(false);
+            using var set = await PackageSet.OpenDirectoryAsync(positional[0], new ReadOptions { Password = suppliedPassword }, token).ConfigureAwait(false);
             foreach (var p in set.Packages) Console.WriteLine($"{p.BuildTimeUtc:O}  {p.TagId:N}  {p.EntryCount} entries  encrypted={p.IsEncrypted}  {p.FilePath}");
             if (args[0] == "verify") { await set.VerifyAsync(token).ConfigureAwait(false); Console.WriteLine("Verification passed."); }
             else foreach (var asset in set.Enumerate()) Console.WriteLine($"{asset.Length,12}  meta={asset.HasMetadata}  {asset.Path}");

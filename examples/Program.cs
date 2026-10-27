@@ -1,5 +1,5 @@
-using System.Text;
 using Quire.Package;
+using System.Text;
 
 if (args.Length is < 1 or > 2)
 {
@@ -8,8 +8,7 @@ if (args.Length is < 1 or > 2)
 }
 
 // 1. 打开目录：递归发现 .asset，并按打包时间合并基础包与补丁。
-using var assets = await AssetPackageSet.OpenDirectoryAsync(args[0],
-    new AssetReadOptions { Password = args.Length == 2 ? args[1] : null });
+using var assets = await PackageSet.OpenDirectoryAsync(args[0], new ReadOptions { Password = args.Length == 2 ? args[1] : null });
 foreach (AssetInfo info in assets.Enumerate())
     Console.WriteLine($"{info.Path}: {info.Length} bytes, meta={info.HasMetadata}");
 
@@ -20,14 +19,18 @@ if (!assets.Contains(path))
     return 1;
 }
 
-// 2. 读取 Meta：独立于资源内容，可在加载文件数据前获取。
-AssetMetadata meta = await assets.ReadMetadataAsync(path);
-Console.WriteLine($"Name: {meta.GetString("name")}, revision: {meta.GetInt64("revision")}");
-Console.WriteLine($"Scale: {meta.GetDouble("scale")}, enabled: {meta.GetBoolean("enabled")}");
-Console.WriteLine($"Tags: {string.Join(", ", meta.GetStringArray("tags"))}");
-Console.WriteLine($"Levels: {string.Join(", ", meta.GetInt64Array("levels").ToArray())}");
-Console.WriteLine($"Weights: {string.Join(", ", meta.GetDoubleArray("weights").ToArray())}");
-Console.WriteLine($"Switches: {string.Join(", ", meta.GetBooleanArray("switches").ToArray())}");
+// 2. 读取可选 Meta：属性不存在或类型不匹配时 TryGet 返回 false，不抛异常。
+Metadata meta = await assets.ReadMetadataAsync(path);
+if (meta.TryGetString("name", out var name)) Console.WriteLine($"Name: {name}");
+if (meta.TryGetInt64("revision", out var revision)) Console.WriteLine($"Revision: {revision}");
+double scale = meta.TryGetDouble("scale", out var scaleValue) ? scaleValue : 1.0;
+Console.WriteLine($"Scale: {scale}");
+if (meta.TryGetBoolean("enabled", out var enabled)) Console.WriteLine($"Enabled: {enabled}");
+if (meta.TryGetStringArray("tags", out var tags)) Console.WriteLine($"Tags: {string.Join(", ", tags)}");
+if (meta.TryGetInt64Array("levels", out var levels)) Console.WriteLine($"Levels: {string.Join(", ", levels.ToArray())}");
+if (meta.TryGetDoubleArray("weights", out var weights)) Console.WriteLine($"Weights: {string.Join(", ", weights.ToArray())}");
+if (meta.TryGetBooleanArray("switches", out var switches)) Console.WriteLine($"Switches: {string.Join(", ", switches.ToArray())}");
+if (meta.TryGetValueType("name", out var nameType)) Console.WriteLine($"Name type: {nameType}");
 if (!meta.TryGetString("optional", out _)) Console.WriteLine("Optional property is absent.");
 
 // 3. 小文件一次读入：AssetData 持有池化缓冲，使用后 Dispose。

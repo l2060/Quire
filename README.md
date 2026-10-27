@@ -237,15 +237,15 @@ using System.Text;
 using Quire.Package;
 
 string directory = args.Length > 0 ? args[0] : "./MyAssets/dist";
-using var assets = await AssetPackageSet.OpenDirectoryAsync(directory);
+using var assets = await PackageSet.OpenDirectoryAsync(directory);
 
 const string path = "common/data/settings.txt";
 AssetInfo info = assets.GetInfo(path);
 Console.WriteLine($"{info.Path}: {info.Length} bytes");
 
-AssetMetadata meta = await assets.ReadMetadataAsync(path);
-Console.WriteLine($"Name: {meta.GetString("name")}");
-Console.WriteLine($"Revision: {meta.GetInt64("revision")}");
+Metadata meta = await assets.ReadMetadataAsync(path);
+if (meta.TryGetString("name", out var name)) Console.WriteLine($"Name: {name}");
+if (meta.TryGetInt64("revision", out var revision)) Console.WriteLine($"Revision: {revision}");
 
 using AssetData file = await assets.ReadAsync(path);
 Console.WriteLine(Encoding.UTF8.GetString(file.Data.Span));
@@ -338,9 +338,12 @@ YAML 支持两空格缩进的块映射、块序列、普通/单引号/双引号�
 可直接运行 [API 基础示例](examples/README.md)，演示打开目录、读取文件、读取八种 Meta 类型、延迟加载与流式按需读取：
 
 ```powershell
+$env:QUIRE_KEY = "your-password"
 dotnet run --project quire-cli -c Release -- package -project examples/quire.project.yml
-dotnet run --project examples/Quire.Package.Examples.csproj -c Release -- examples/dist
+dotnet run --project examples/Quire.Package.Examples.csproj -c Release -- examples/dist $env:QUIRE_KEY
 ```
+
+仓库内的示例配置已开启加密，以上打包和读取使用同一个密码；`init` 生成的新项目仍默认关闭加密。
 
 ## 固定 property=value Meta
 
@@ -435,7 +438,7 @@ quire-cli unpackage ./encrypted-dist ./unpacked -pwd-env QUIRE_KEY -jobs 4
 ```csharp
 using Quire.Package;
 
-using var assets = await AssetPackageSet.OpenDirectoryAsync("./MyAssets/dist");
+using var assets = await PackageSet.OpenDirectoryAsync("./MyAssets/dist");
 const string path = "common/data/settings.txt";
 
 foreach (AssetPackageInfo package in assets.Packages)
@@ -448,9 +451,9 @@ if (!assets.TryGetInfo(path, out AssetInfo info))
     throw new FileNotFoundException("Resource was not found.", path);
 ```
 
-同步打开使用 `AssetPackageSet.OpenDirectory(directory, options)`。集合应通过 `using` 或 `await using` 释放。打开目录会读取包头和必要索引，不会一次加载全部资源内容。
+同步打开使用 `PackageSet.OpenDirectory(directory, options)`。集合应通过 `using` 或 `await using` 释放。打开目录会读取包头和必要索引，不会一次加载全部资源内容。
 
-默认递归扫描 `.asset` 文件；跳过 `.asset` 状态目录、以 `.tmp` 结尾的暂存目录和符号链接。`AssetReadOptions.Recursive=false` 可限制为当前目录。不可读的包、缺少密码或打开阶段发现的格式损坏会使打开失败，并报告具体文件；完整数据检查使用 `VerifyAsync`。
+默认递归扫描 `.asset` 文件；跳过 `.asset` 状态目录、以 `.tmp` 结尾的暂存目录和符号链接。`ReadOptions.Recursive=false` 可限制为当前目录。不可读的包、缺少密码或打开阶段发现的格式损坏会使打开失败，并报告具体文件；完整数据检查使用 `VerifyAsync`。
 
 `Enumerate()` 枚举所有有效文件；`Enumerate("common/data", false)` 仅枚举该虚拟目录的直接子文件。`Contains(path)` 仅判断是否存在，`GetInfo(path)` 在不存在时抛出 `FileNotFoundException`，`TryGetInfo` 则返回 `false`。查询只访问必要索引，不读取资源内容。
 
@@ -474,24 +477,23 @@ using (AssetData file = await assets.ReadAsync(path))
 
 ### 只读取 Meta
 
-读取 Meta 不需要加载文件内容。以下字段对应快速上手中的 `settings.txt.meta`：
+读取 Meta 不需要加载文件内容。对于可选属性，使用 `TryGet...`；缺少字段或类型不匹配时返回 `false`，可由调用方指定默认值：
 
 ```csharp
-AssetMetadata meta = await assets.ReadMetadataAsync(path);
-Console.WriteLine(meta.GetString("name"));
-Console.WriteLine(meta.GetInt64("revision"));
-Console.WriteLine(meta.GetDouble("scale"));
-Console.WriteLine(meta.GetBoolean("enabled"));
-Console.WriteLine(string.Join(", ", meta.GetStringArray("tags")));
+Metadata meta = await assets.ReadMetadataAsync(path);
+if (meta.TryGetString("name", out var name)) Console.WriteLine(name);
+if (meta.TryGetInt64("revision", out var revision)) Console.WriteLine(revision);
+if (meta.TryGetBoolean("enabled", out var enabled)) Console.WriteLine(enabled);
+if (meta.TryGetStringArray("tags", out var tags)) Console.WriteLine(string.Join(", ", tags));
+if (meta.TryGetInt64Array("levels", out var levels))
+    foreach (long level in levels) Console.WriteLine(level);
 
-foreach (long level in meta.GetInt64Array("levels"))
-    Console.WriteLine(level);
-
-double scale = meta.TryGetDouble("optionalScale", out double value) ? value : 1.0;
-Console.WriteLine($"Optional scale: {scale}");
+double scale = meta.TryGetDouble("scale", out double value) ? value : 1.0;
+Console.WriteLine($"Scale: {scale}");
+if (meta.TryGetValueType("name", out var type)) Console.WriteLine($"Name type: {type}");
 ```
 
-同步方式为 `assets.ReadMetadata(path)`。没有 Meta 时返回 `AssetMetadata.Empty`；通过 `AssetInfo.HasMetadata` 可区分没有 Meta 和存在空 Meta。
+同步方式为 `assets.ReadMetadata(path)`。没有 Meta 时返回 `Metadata.Empty`；通过 `AssetInfo.HasMetadata` 可区分没有 Meta 和存在空 Meta。
 
 | Meta 类型 | 读取方法 | 返回类型 |
 | --- | --- | --- |
@@ -504,7 +506,9 @@ Console.WriteLine($"Optional scale: {scale}");
 | double[] | `GetDoubleArray` / `TryGetDoubleArray` | `ReadOnlySpan<double>` |
 | bool[] | `GetBooleanArray` / `TryGetBooleanArray` | `ReadOnlySpan<bool>` |
 
-`TryGet` 的返回值为是否成功，表中的类型是其 `out` 参数类型；字符串相关 `out` 参数可为 null。缺少字段或类型不匹配时返回 `false`，不进行隐式类型转换。`Get` 对应抛出 `KeyNotFoundException` 或 `InvalidCastException`。还可使用 `Count`、`Keys`、`Contains(key)` 和 `GetValueType(key)` 查看字段。
+`TryGet` 的返回值为是否成功，表中的类型是其 `out` 参数类型。缺少字段或类型不匹配时返回 `false`，并将 `out` 设为默认值：字符串/字符串数组为 null，整数和浮点数为 0，布尔值为 false，数值/布尔数组为空 Span。成功读取字符串或字符串数组时，编译器知道结果非 null，无需使用 `!`。合法的 0、false、空字符串和空数组仍返回 `true`，应以方法返回值判断是否成功。
+
+`TryGetValueType(key, out type)` 用于安全查询字段类型，字段不存在时返回 `false` 并将 `type` 设为默认值。`Contains(key)` 可判断属性是否存在，`Count` 和 `Keys` 可用于枚举。需要强制校验必填字段时使用 `Get...` / `GetValueType`，缺失或类型不匹配时会抛异常；API 不进行隐式类型转换。
 
 数值字段访问不装箱、不分配；字符串按需解码并缓存在该 Meta 对象内。数值和布尔数组返回只读 Span，若需要跨 `await` 保存数组数据，可使用 `ToArray()` 创建副本。
 
@@ -554,7 +558,7 @@ using (FileStream output = File.Create("./settings-copy.txt"))
 
 ### 并发读取
 
-同一个 `AssetPackageSet` 可供多个任务共享；每项读取独立持有缓冲或流。示例将并行度限制为 4：
+同一个 `PackageSet` 可供多个任务共享；每项读取独立持有缓冲或流。示例将并行度限制为 4：
 
 ```csharp
 await Parallel.ForEachAsync(
@@ -574,7 +578,7 @@ await Parallel.ForEachAsync(
 加密包可在打开目录时提供密码：
 
 ```csharp
-var options = new AssetReadOptions
+var options = new ReadOptions
 {
     Password = Environment.GetEnvironmentVariable("GAME_ASSET_KEY"),
     Recursive = true,
@@ -584,7 +588,7 @@ var options = new AssetReadOptions
     PageCacheBytes = 8 * 1024 * 1024,
     MetadataCacheBytes = 4 * 1024 * 1024
 };
-using var encryptedAssets = await AssetPackageSet.OpenDirectoryAsync("./encrypted-dist", options);
+using var encryptedAssets = await PackageSet.OpenDirectoryAsync("./encrypted-dist", options);
 ```
 
 未加密的目录不需要设置 `Password`。不同包使用不同密码时，可设置 `PasswordProvider` 回调，根据 `AssetPackageInfo.FilePath` 或 `TagId` 返回密码。

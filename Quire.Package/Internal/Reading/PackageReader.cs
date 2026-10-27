@@ -14,7 +14,7 @@ internal sealed class PackageReader : IDisposable
     internal ProtectedSection Blocks { get; }
     internal CipherPool Ciphers { get; }
 
-    private PackageReader(FileStorage file, PackageHeader h, AssetPackageInfo info, byte[] key, AssetReadOptions options)
+    private PackageReader(FileStorage file, PackageHeader h, AssetPackageInfo info, byte[] key, ReadOptions options)
     {
         File = file; Header = h; Info = info; Key = key;
         Ciphers = new(key, h.TagId);
@@ -23,7 +23,7 @@ internal sealed class PackageReader : IDisposable
         Blocks = new(file, h, key, 3, h.BlocksOffset, h.BlocksLength, options.PageCacheBytes / 3);
     }
 
-    internal static async ValueTask<PackageReader> OpenAsync(string path, AssetReadOptions options, bool asynchronous, CancellationToken token)
+    internal static async ValueTask<PackageReader> OpenAsync(string path, ReadOptions options, bool asynchronous, CancellationToken token)
     {
         FileStorage? file = null; PackageReader? reader = null; byte[]? key = null;
         try
@@ -102,13 +102,13 @@ internal sealed class PackageReader : IDisposable
     }
     internal IEnumerable<string> Paths()
     { for (long i = 0; i < Header.EntryCount; i++) yield return ReadPath(i); }
-    internal async ValueTask<AssetMetadata> ReadMetadataAsync(EntryRecord e, bool asynchronous, CancellationToken token)
+    internal async ValueTask<Metadata> ReadMetadataAsync(EntryRecord e, bool asynchronous, CancellationToken token)
     {
-        if (!e.HasMetadata) return AssetMetadata.Empty;
+        if (!e.HasMetadata) return Package.Metadata.Empty;
         byte[] bytes = new byte[e.MetadataLength];
         if (asynchronous) await Metadata.ReadAsync(bytes, e.MetadataOffset, token).ConfigureAwait(false);
         else Metadata.Read(bytes, e.MetadataOffset);
-        return new AssetMetadata(bytes);
+        return new Metadata(bytes);
     }
     public void Dispose()
     {

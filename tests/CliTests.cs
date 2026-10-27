@@ -39,8 +39,8 @@ internal static class CliTests
             {
                 CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
                 byte[] encoded = PropertyMetadata.Parse(source);
-                Check.Bytes(encoded, PropertyMetadata.Parse(PropertyMetadata.Format(new AssetMetadata(encoded))));
-                Check.Equal("", PropertyMetadata.Format(AssetMetadata.Empty));
+                Check.Bytes(encoded, PropertyMetadata.Parse(PropertyMetadata.Format(new Metadata(encoded))));
+                Check.Equal("", PropertyMetadata.Format(Metadata.Empty));
             }
             finally { CultureInfo.CurrentCulture = previous; }
             return Task.CompletedTask;
@@ -94,7 +94,7 @@ internal static class CliTests
                 Check.Equal(5, Directory.GetFiles(destination, "*", SearchOption.AllDirectories).Length);
                 File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("directory: ./input", "directory: ./unpacked").Replace("prefix: common/data", "prefix: \"\""));
                 Check.Equal(3, (await f.Build()).ContentChanges);
-                using var set = AssetPackageSet.OpenDirectory(f.Output, f.ReadOptions);
+                using var set = PackageSet.OpenDirectory(f.Output, f.ReadOptions);
                 using var restored = set.Read("common/data/sub/中文😀.bin"); Check.Bytes(body, restored.Data.Span);
                 Check.Equal("001", restored.Metadata.GetString("name")); Check.Equal(1d, restored.Metadata.GetDouble("d"));
             });
@@ -112,7 +112,7 @@ internal static class CliTests
             Check.Bytes([9], File.ReadAllBytes(Path.Combine(destination, "common/data/a")));
             Check.True(!File.Exists(Path.Combine(destination, "common/data/a.meta")));
             Check.Bytes([3], File.ReadAllBytes(Path.Combine(destination, "common/data/inherited")));
-            var metadata = new AssetMetadata(PropertyMetadata.Parse(File.ReadAllText(Path.Combine(destination, "common/data/metadata.meta"))));
+            var metadata = new Metadata(PropertyMetadata.Parse(File.ReadAllText(Path.Combine(destination, "common/data/metadata.meta"))));
             Check.Equal(2L, metadata.GetInt64("version")); Check.True(!metadata.Contains("old"));
         });
         test("unpackage rejects nonempty, overlapping, missing and empty directories", async () =>
@@ -143,7 +143,7 @@ internal static class CliTests
         {
             using var f = new Fixture(true, true); f.Put("a", [1]); await f.Build();
             string destination = Path.Combine(f.Root, "unpacked");
-            await Check.ThrowsAsync<InvalidDataException>(() => PackageExtractor.ExtractAsync(f.Output, destination, new AssetReadOptions { Password = "wrong" }, default));
+            await Check.ThrowsAsync<InvalidDataException>(() => PackageExtractor.ExtractAsync(f.Output, destination, new ReadOptions { Password = "wrong" }, default));
             Check.True(!Directory.Exists(destination));
         });
         test("unpackage file-directory and metadata collisions clean staging without publishing", async () =>
@@ -264,7 +264,7 @@ internal static class CliTests
             await Check.ThrowsAsync<IOException>(() => CommandLine.RunAsync(["init", root], default));
             Check.Equal(original, File.ReadAllText(path));
             Check.Equal(0, await CommandLine.RunAsync(["package", "-project", path, "-jobs", "5"], default));
-            using var assets = AssetPackageSet.OpenDirectory(project.Output);
+            using var assets = PackageSet.OpenDirectory(project.Output);
             Check.Equal(2, assets.Packages.Count); Check.Equal(3, assets.Enumerate().Count());
             Check.True(assets.Contains("common/data/hello.txt")); Check.True(assets.Contains("common/shared/hello.txt"));
             Check.True(assets.Contains("strings/hello.txt"));

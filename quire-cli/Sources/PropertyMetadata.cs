@@ -12,8 +12,8 @@ namespace Quire.Cli.Sources;
 internal static class PropertyMetadata
 {
     private static readonly CliJsonContext TextJson = new(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-    private sealed record Value(AssetMetadataType Type, object Data, int Count);
-    internal static string Format(AssetMetadata metadata)
+    private sealed record Value(MetadataType Type, object Data, int Count);
+    internal static string Format(Metadata metadata)
     {
         var text = new StringBuilder();
         foreach (string key in metadata.Keys)
@@ -23,15 +23,15 @@ internal static class PropertyMetadata
             string type, literal;
             switch (metadata.GetValueType(key))
             {
-                case AssetMetadataType.String: type = "string"; literal = JsonSerializer.Serialize(metadata.GetString(key), TextJson.String); break;
-                case AssetMetadataType.Int64: type = "int64"; literal = metadata.GetInt64(key).ToString(CultureInfo.InvariantCulture); break;
-                case AssetMetadataType.Double: type = "double"; literal = FormatDouble(metadata.GetDouble(key)); break;
-                case AssetMetadataType.Boolean: type = "bool"; literal = metadata.GetBoolean(key) ? "true" : "false"; break;
-                case AssetMetadataType.StringArray: type = "string[]"; literal = JsonSerializer.Serialize(metadata.GetStringArray(key).ToArray(), TextJson.StringArray); break;
-                case AssetMetadataType.Int64Array: type = "int64[]"; literal = JsonSerializer.Serialize(metadata.GetInt64Array(key).ToArray(), TextJson.Int64Array); break;
-                case AssetMetadataType.DoubleArray:
+                case MetadataType.String: type = "string"; literal = JsonSerializer.Serialize(metadata.GetString(key), TextJson.String); break;
+                case MetadataType.Int64: type = "int64"; literal = metadata.GetInt64(key).ToString(CultureInfo.InvariantCulture); break;
+                case MetadataType.Double: type = "double"; literal = FormatDouble(metadata.GetDouble(key)); break;
+                case MetadataType.Boolean: type = "bool"; literal = metadata.GetBoolean(key) ? "true" : "false"; break;
+                case MetadataType.StringArray: type = "string[]"; literal = JsonSerializer.Serialize(metadata.GetStringArray(key).ToArray(), TextJson.StringArray); break;
+                case MetadataType.Int64Array: type = "int64[]"; literal = JsonSerializer.Serialize(metadata.GetInt64Array(key).ToArray(), TextJson.Int64Array); break;
+                case MetadataType.DoubleArray:
                     type = "double[]"; literal = "[" + string.Join(',', metadata.GetDoubleArray(key).ToArray().Select(FormatDouble)) + "]"; break;
-                case AssetMetadataType.BooleanArray: type = "bool[]"; literal = JsonSerializer.Serialize(metadata.GetBooleanArray(key).ToArray(), TextJson.BooleanArray); break;
+                case MetadataType.BooleanArray: type = "bool[]"; literal = JsonSerializer.Serialize(metadata.GetBooleanArray(key).ToArray(), TextJson.BooleanArray); break;
                 default: throw new InvalidDataException("Unsupported metadata type.");
             }
             // A leading BOM in a property name must not become the sidecar's BOM.
@@ -88,7 +88,7 @@ internal static class PropertyMetadata
             BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(16), v.Count); d[20] = (byte)v.Type;
         }
         stream.Position = 8; foreach (var d in descriptors) writer.Write(d);
-        var result = stream.ToArray(); _ = new AssetMetadata(result); return result;
+        var result = stream.ToArray(); _ = new Metadata(result); return result;
     }
     private static Value ParseValue(string text, string? type)
     {
@@ -101,10 +101,10 @@ internal static class PropertyMetadata
             string element = type is not null ? type[..^2] : InferArray(items);
             return element switch
             {
-                "string" => new(AssetMetadataType.StringArray, items.Select(x => x.ValueKind == JsonValueKind.String ? x.GetString()! : throw new FormatException("Expected string array.")).ToArray(), items.Length),
-                "int64" => new(AssetMetadataType.Int64Array, items.Select(x => x.TryGetInt64(out long n) ? n : throw new FormatException("Expected int64 array.")).ToArray(), items.Length),
-                "double" => new(AssetMetadataType.DoubleArray, items.Select(ReadDouble).ToArray(), items.Length),
-                "bool" => new(AssetMetadataType.BooleanArray, items.Select(x => x.ValueKind is JsonValueKind.True or JsonValueKind.False ? x.GetBoolean() : throw new FormatException("Expected bool array.")).ToArray(), items.Length),
+                "string" => new(MetadataType.StringArray, items.Select(x => x.ValueKind == JsonValueKind.String ? x.GetString()! : throw new FormatException("Expected string array.")).ToArray(), items.Length),
+                "int64" => new(MetadataType.Int64Array, items.Select(x => x.TryGetInt64(out long n) ? n : throw new FormatException("Expected int64 array.")).ToArray(), items.Length),
+                "double" => new(MetadataType.DoubleArray, items.Select(ReadDouble).ToArray(), items.Length),
+                "bool" => new(MetadataType.BooleanArray, items.Select(x => x.ValueKind is JsonValueKind.True or JsonValueKind.False ? x.GetBoolean() : throw new FormatException("Expected bool array.")).ToArray(), items.Length),
                 _ => throw new FormatException($"Unsupported metadata type '{type}'.")
             };
         }
@@ -118,10 +118,10 @@ internal static class PropertyMetadata
         }
         return type switch
         {
-            "string" => new(AssetMetadataType.String, text.StartsWith('"') ? JsonSerializer.Deserialize(text, TextJson.String) ?? throw new FormatException("Null is not supported.") : text, 1),
-            "int64" => new(AssetMetadataType.Int64, long.Parse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture), 1),
-            "double" => new(AssetMetadataType.Double, Finite(double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture)), 1),
-            "bool" => new(AssetMetadataType.Boolean, bool.Parse(text), 1),
+            "string" => new(MetadataType.String, text.StartsWith('"') ? JsonSerializer.Deserialize(text, TextJson.String) ?? throw new FormatException("Null is not supported.") : text, 1),
+            "int64" => new(MetadataType.Int64, long.Parse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture), 1),
+            "double" => new(MetadataType.Double, Finite(double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture)), 1),
+            "bool" => new(MetadataType.Boolean, bool.Parse(text), 1),
             _ => throw new FormatException($"Unsupported metadata type '{type}'.")
         };
     }
@@ -155,14 +155,14 @@ internal static class PropertyMetadata
     {
         switch (value.Type)
         {
-            case AssetMetadataType.String: w.Write(AssetPath.Utf8.GetBytes((string)value.Data)); break;
-            case AssetMetadataType.Int64: w.Write((long)value.Data); break;
-            case AssetMetadataType.Double: w.Write((double)value.Data); break;
-            case AssetMetadataType.Boolean: w.Write((bool)value.Data); break;
-            case AssetMetadataType.Int64Array: foreach (long v in (long[])value.Data) w.Write(v); break;
-            case AssetMetadataType.DoubleArray: foreach (double v in (double[])value.Data) w.Write(v); break;
-            case AssetMetadataType.BooleanArray: foreach (bool v in (bool[])value.Data) w.Write(v); break;
-            case AssetMetadataType.StringArray:
+            case MetadataType.String: w.Write(AssetPath.Utf8.GetBytes((string)value.Data)); break;
+            case MetadataType.Int64: w.Write((long)value.Data); break;
+            case MetadataType.Double: w.Write((double)value.Data); break;
+            case MetadataType.Boolean: w.Write((bool)value.Data); break;
+            case MetadataType.Int64Array: foreach (long v in (long[])value.Data) w.Write(v); break;
+            case MetadataType.DoubleArray: foreach (double v in (double[])value.Data) w.Write(v); break;
+            case MetadataType.BooleanArray: foreach (bool v in (bool[])value.Data) w.Write(v); break;
+            case MetadataType.StringArray:
                 var strings = ((string[])value.Data).Select(AssetPath.Utf8.GetBytes).ToArray();
                 int offset = checked((strings.Length + 1) * 4);
                 w.Write(offset); foreach (var s in strings) { offset = checked(offset + s.Length); w.Write(offset); }

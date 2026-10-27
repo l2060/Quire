@@ -10,11 +10,17 @@ public sealed class AssetData : IDisposable
     private readonly int _length;
     private readonly bool _clear;
     public AssetInfo Info { get; }
-    public AssetMetadata Metadata { get; }
+    public Metadata Metadata { get; }
     public ReadOnlyMemory<byte> Data => (_bytes ?? throw new ObjectDisposedException(nameof(AssetData))).AsMemory(0, _length);
 
-    internal AssetData(AssetInfo info, AssetMetadata metadata, byte[] bytes, int length, bool clear)
-    { Info = info; Metadata = metadata; _bytes = bytes; _length = length; _clear = clear; }
+    internal AssetData(AssetInfo info, Metadata metadata, byte[] bytes, int length, bool clear)
+    {
+        Info = info;
+        Metadata = metadata;
+        _bytes = bytes;
+        _length = length;
+        _clear = clear;
+    }
 
     public void Dispose()
     {

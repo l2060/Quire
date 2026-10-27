@@ -41,8 +41,8 @@ try
         foreach (bool mapped in compressed ? new[] { true, false } : new[] { false, true })
         {
             string backend = mapped ? "MemoryMapped" : "RandomAccess";
-            var options = new AssetReadOptions { Password = encrypted ? "benchmark-only-password" : null, ReadMode = mapped ? AssetReadMode.MemoryMapped : AssetReadMode.RandomAccess };
-            var opening = Stopwatch.StartNew(); using var assets = AssetPackageSet.OpenDirectory(output, options); opening.Stop();
+            var options = new ReadOptions { Password = encrypted ? "benchmark-only-password" : null, ReadMode = mapped ? AssetReadMode.MemoryMapped : AssetReadMode.RandomAccess };
+            var opening = Stopwatch.StartNew(); using var assets = PackageSet.OpenDirectory(output, options); opening.Stop();
             byte[] warm = new byte[4096]; foreach (string path in paths) { _ = assets.ReadAt(path, 0, warm); _ = assets.ReadMetadata(path); }
             using (var stream = assets.OpenRead("data/large.bin")) stream.CopyTo(Stream.Null);
             foreach (string workload in new[] { "random-range-4KiB", "random-full-with-meta", "large-random-range-4KiB" })
@@ -113,7 +113,7 @@ try
         OS = System.Runtime.InteropServices.RuntimeInformation.OSDescription, ProcessArchitecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
         ProcessorCount = Environment.ProcessorCount, Files = files, Operations = operations,
         Cache = "Warm OS cache; no cold-disk claims. Same-process repeated rounds; order alternates across profiles.",
-        LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(AssetPackageSet).Assembly.Location))),
+        LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(PackageSet).Assembly.Location))),
         Measurements = results, Metadata = metadataResults
     };
     await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));

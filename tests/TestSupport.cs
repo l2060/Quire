@@ -25,7 +25,7 @@ internal sealed class Fixture : IDisposable
     internal string Output => Path.Combine(Root, "dist");
     internal string ProjectPath => Path.Combine(Root, "quire.project.yml");
     private readonly string _variable = "ASSET_TEST_KEY_" + Guid.NewGuid().ToString("N");
-    internal AssetReadOptions ReadOptions { get; }
+    internal ReadOptions ReadOptions { get; }
     internal BuildOptions BuildOptions { get; } = new() { Jobs = 4, IoConcurrency = 4 };
     internal Fixture(bool compression = true, bool encryption = false)
     {

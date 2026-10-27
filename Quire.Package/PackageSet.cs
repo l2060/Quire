@@ -5,30 +5,30 @@ using System.Security.Cryptography;
 namespace Quire.Package;
 
 /// <summary>A fixed, read-only view of packages discovered in a directory. Later packages override paths.</summary>
-public sealed class AssetPackageSet : IDisposable, IAsyncDisposable
+public sealed class PackageSet : IDisposable, IAsyncDisposable
 {
     private readonly PackageReader[] _packages;
-    private readonly AssetReadOptions _options;
+    private readonly ReadOptions _options;
     private int _references = 1, _closed;
     private readonly object _cacheSync = new();
-    private readonly Dictionary<(PackageReader, long), AssetMetadata> _metadata = new();
+    private readonly Dictionary<(PackageReader, long), Metadata> _metadata = new();
     private readonly Queue<(PackageReader, long)> _metadataOrder = new();
     private long _metadataBytes;
     public IReadOnlyList<AssetPackageInfo> Packages { get; }
 
-    private AssetPackageSet(PackageReader[] packages, AssetReadOptions options)
+    private PackageSet(PackageReader[] packages, ReadOptions options)
     {
         _packages = packages;
         _options = options;
         Packages = Array.AsReadOnly(packages.Select(p => p.Info).ToArray());
     }
 
-    public static AssetPackageSet OpenDirectory(string directory, AssetReadOptions? options = null) =>
+    public static PackageSet OpenDirectory(string directory, ReadOptions? options = null) =>
         OpenCoreAsync(directory, options ?? new(), false, default).GetAwaiter().GetResult();
-    public static ValueTask<AssetPackageSet> OpenDirectoryAsync(string directory, AssetReadOptions? options = null, CancellationToken cancellationToken = default) =>
+    public static ValueTask<PackageSet> OpenDirectoryAsync(string directory, ReadOptions? options = null, CancellationToken cancellationToken = default) =>
         OpenCoreAsync(directory, options ?? new(), true, cancellationToken);
 
-    private static async ValueTask<AssetPackageSet> OpenCoreAsync(string directory, AssetReadOptions options, bool asynchronous, CancellationToken token)
+    private static async ValueTask<PackageSet> OpenCoreAsync(string directory, ReadOptions options, bool asynchronous, CancellationToken token)
     {
         options.Validate();
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("Asset packages currently support little-endian .NET platforms.");
@@ -106,16 +106,16 @@ public sealed class AssetPackageSet : IDisposable, IAsyncDisposable
         }
         finally { foreach (var i in iterators) i.Dispose(); }
     }
-    public AssetMetadata ReadMetadata(string path) => ReadMetadataCoreAsync(path, false, default).GetAwaiter().GetResult();
-    public ValueTask<AssetMetadata> ReadMetadataAsync(string path, CancellationToken cancellationToken = default) => ReadMetadataCoreAsync(path, true, cancellationToken);
-    private async ValueTask<AssetMetadata> ReadMetadataCoreAsync(string path, bool asynchronous, CancellationToken token)
+    public Metadata ReadMetadata(string path) => ReadMetadataCoreAsync(path, false, default).GetAwaiter().GetResult();
+    public ValueTask<Metadata> ReadMetadataAsync(string path, CancellationToken cancellationToken = default) => ReadMetadataCoreAsync(path, true, cancellationToken);
+    private async ValueTask<Metadata> ReadMetadataCoreAsync(string path, bool asynchronous, CancellationToken token)
     {
         using var lease = Acquire(); AssetPath.Validate(path); token.ThrowIfCancellationRequested();
         return await MetadataAsync(Require(path), asynchronous, token).ConfigureAwait(false);
     }
-    private async ValueTask<AssetMetadata> MetadataAsync(Resolved r, bool asynchronous, CancellationToken token)
+    private async ValueTask<Metadata> MetadataAsync(Resolved r, bool asynchronous, CancellationToken token)
     {
-        if (!r.Metadata.HasMetadata) return AssetMetadata.Empty;
+        if (!r.Metadata.HasMetadata) return Metadata.Empty;
         var key = (r.MetadataPackage, r.Metadata.MetadataOffset);
         lock (_cacheSync) if (_metadata.TryGetValue(key, out var existing)) return existing;
         var result = await r.MetadataPackage.ReadMetadataAsync(r.Metadata, asynchronous, token).ConfigureAwait(false);
@@ -248,10 +248,10 @@ public sealed class AssetPackageSet : IDisposable, IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             int count = Volatile.Read(ref _references);
-            if (count == 0) throw new ObjectDisposedException(nameof(AssetPackageSet));
+            if (count == 0) throw new ObjectDisposedException(nameof(PackageSet));
             if (Interlocked.CompareExchange(ref _references, checked(count + 1), count) != count) continue;
             if (Volatile.Read(ref _closed) == 0) return new(this);
-            Release(); throw new ObjectDisposedException(nameof(AssetPackageSet));
+            Release(); throw new ObjectDisposedException(nameof(PackageSet));
         }
     }
     private void Release()
@@ -262,7 +262,7 @@ public sealed class AssetPackageSet : IDisposable, IAsyncDisposable
     }
     public void Dispose() { if (Interlocked.Exchange(ref _closed, 1) == 0) Release(); }
     public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
-    private sealed class Lease(AssetPackageSet owner) : IDisposable
-    { private AssetPackageSet? _owner = owner; public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release(); }
+    private sealed class Lease(PackageSet owner) : IDisposable
+    { private PackageSet? _owner = owner; public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release(); }
     private sealed class NoopLease : IDisposable { public void Dispose() { } }
 }

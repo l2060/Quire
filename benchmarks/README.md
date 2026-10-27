@@ -34,7 +34,7 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- be
 | AES-GCM | 228.67 | 179.70 | 64.38 | 181.26 |
 | LZ4 + AES-GCM | 206.60 | 178.87 | 61.92 | 179.89 |
 
-映射在本机热缓存的未加密小读中有明显收益；加密资源的异步并发读取使用 RandomAccess 更快。默认保留 RandomAccess，提供 `AssetReadOptions.ReadMode = AssetReadMode.MemoryMapped` 显式选择，不根据这组热缓存结果自动启用映射。
+映射在本机热缓存的未加密小读中有明显收益；加密资源的异步并发读取使用 RandomAccess 更快。默认保留 RandomAccess，提供 `ReadOptions.ReadMode = AssetReadMode.MemoryMapped` 显式选择，不根据这组热缓存结果自动启用映射。
 
 1500次大资源内随机4KiB读取，同步单线程中位数：
 

@@ -16,7 +16,7 @@ internal static class Suite
         CliTests.Register(Test);
         Sync("all eight metadata types and deterministic property encoding", () =>
         {
-            var m = new AssetMetadata(PropertyMetadata.Parse("name=hero\ni=-9223372036854775808\nd=1.25\nb=true\ns=[\"a\",\"中\"]\nints=[1,2]\nds=[0.5,2.0]\nbs=[true,false]\nempty:int64[]=[]\ncode:string=001\nurl=a=b#c"));
+            var m = new Metadata(PropertyMetadata.Parse("name=hero\ni=-9223372036854775808\nd=1.25\nb=true\ns=[\"a\",\"中\"]\nints=[1,2]\nds=[0.5,2.0]\nbs=[true,false]\nempty:int64[]=[]\ncode:string=001\nurl=a=b#c"));
             Check.Equal("hero", m.GetString("name")); Check.Equal(long.MinValue, m.GetInt64("i")); Check.Equal(1.25, m.GetDouble("d")); Check.True(m.GetBoolean("b"));
             Check.Equal("中", m.GetStringArray("s")[1]); Check.True(m.GetInt64Array("ints").SequenceEqual([1L, 2L]));
             Check.True(m.GetDoubleArray("ds").SequenceEqual([0.5, 2.0])); Check.True(m.GetBooleanArray("bs").SequenceEqual([true, false]));
@@ -52,18 +52,18 @@ internal static class Suite
                 using var f = new Fixture(c, e); byte[] expected = new byte[700_123]; new Random(17).NextBytes(expected); expected.AsSpan(300000, 200000).Clear();
                 f.Put("body.bin", expected); f.Text("body.bin.meta", "name=unique-secret-metadata\noffset=-16\nweights=[1.5,2.5]"); f.Put("empty.bin", []); f.Text("empty.bin.meta", "");
                 var tag = await f.Build(); Check.Equal(2, tag.ContentChanges); Check.Equal(1, tag.Outputs.Length);
-                using var set = await AssetPackageSet.OpenDirectoryAsync(f.Output, f.ReadOptions);
+                using var set = await PackageSet.OpenDirectoryAsync(f.Output, f.ReadOptions);
                 Check.Equal(tag.TagId, set.Packages.Single().TagId); Check.Equal(2, set.Enumerate().Count());
                 using var data = await set.ReadAsync("common/data/body.bin"); Check.Bytes(expected, data.Data.Span); Check.Equal(-16L, data.Metadata.GetInt64("offset"));
                 Check.True(set.GetInfo("common/data/empty.bin").HasMetadata); using var empty = set.Read("common/data/empty.bin"); Check.Equal(0, empty.Data.Length);
                 byte[] range = new byte[5000]; Check.Equal(range.Length, await set.ReadAtAsync("common/data/body.bin", 262140, range)); Check.Bytes(expected.AsSpan(262140, range.Length), range);
                 using var stream = set.OpenRead("common/data/body.bin"); stream.Seek(-17, SeekOrigin.End); Check.Equal((int)expected[^17], stream.ReadByte());
                 await set.VerifyAsync();
-                using var paged = AssetPackageSet.OpenDirectory(f.Output, f.ReadOptions with { MaxResidentIndexBytes = 0, PageCacheBytes = 0, MetadataCacheBytes = 0 });
+                using var paged = PackageSet.OpenDirectory(f.Output, f.ReadOptions with { MaxResidentIndexBytes = 0, PageCacheBytes = 0, MetadataCacheBytes = 0 });
                 using var again = paged.Read("common/data/body.bin"); Check.Bytes(expected, again.Data.Span);
                 byte[] disk = File.ReadAllBytes(Path.Combine(f.Root, tag.Outputs.Single())); var h = PackageHeader.Decode(disk.AsSpan(0, 4096), disk.Length);
                 Check.True(disk.AsSpan(0, (int)h.DataOffset).IndexOf("common/data/body.bin"u8) < 0); Check.True(disk.AsSpan(0, (int)h.DataOffset).IndexOf("unique-secret-metadata"u8) < 0);
-                if (e) Check.Throws<InvalidDataException>(() => AssetPackageSet.OpenDirectory(f.Output, new AssetReadOptions { Password = "incorrect" }));
+                if (e) Check.Throws<InvalidDataException>(() => PackageSet.OpenDirectory(f.Output, new ReadOptions { Password = "incorrect" }));
                 Check.Equal(0, Directory.GetFiles(f.Output, "*.tmp", SearchOption.AllDirectories).Length);
             });
         }
@@ -71,36 +71,36 @@ internal static class Suite
         {
             using var f = new Fixture(); f.Put("a", [1, 2]); f.Text("a.meta", "x=1\nold=true"); f.Put("gone", [3]);
             var a = await f.Build(); f.Text("a.meta", "x=2"); var b = await f.Build(a.TagId); Check.Equal(0, b.ContentChanges); Check.Equal(1, b.MetadataChanges);
-            using (var only = AssetPackageSet.OpenDirectory(Path.Combine(f.Output, b.TagId.ToString("N")))) { Check.True(!only.Contains("common/data/a")); only.Verify(); }
-            using (var all = AssetPackageSet.OpenDirectory(f.Output)) { using var r = all.Read("common/data/a"); Check.Bytes([1, 2], r.Data.Span); Check.Equal(2L, r.Metadata.GetInt64("x")); Check.True(!r.Metadata.Contains("old")); }
+            using (var only = PackageSet.OpenDirectory(Path.Combine(f.Output, b.TagId.ToString("N")))) { Check.True(!only.Contains("common/data/a")); only.Verify(); }
+            using (var all = PackageSet.OpenDirectory(f.Output)) { using var r = all.Read("common/data/a"); Check.Bytes([1, 2], r.Data.Span); Check.Equal(2L, r.Metadata.GetInt64("x")); Check.True(!r.Metadata.Contains("old")); }
             File.Delete(Path.Combine(f.Input, "a.meta")); File.Delete(Path.Combine(f.Input, "gone")); var noDelete = await f.Build(b.TagId); Check.Equal(0, noDelete.Outputs.Length);
-            using (var all = AssetPackageSet.OpenDirectory(f.Output)) { Check.True(all.Contains("common/data/gone")); Check.Equal(2L, all.ReadMetadata("common/data/a").GetInt64("x")); }
+            using (var all = PackageSet.OpenDirectory(f.Output)) { Check.True(all.Contains("common/data/gone")); Check.Equal(2L, all.ReadMetadata("common/data/a").GetInt64("x")); }
             Check.Equal(2, TagStore.LoadFiles(f.Config().StateDirectory, noDelete.TagId).Count);
             f.Put("a", [9]); await f.Build(noDelete.TagId);
-            using var final = AssetPackageSet.OpenDirectory(f.Output); Check.True(!final.GetInfo("common/data/a").HasMetadata); using var data = final.Read("common/data/a"); Check.Bytes([9], data.Data.Span);
+            using var final = PackageSet.OpenDirectory(f.Output); Check.True(!final.GetInfo("common/data/a").HasMetadata); using var data = final.Read("common/data/a"); Check.Bytes([9], data.Data.Span);
         });
         Test("header time ordering and relative filename tie break", async () =>
         {
             using var f = new Fixture(); f.Put("a", [1]); var a = await f.Build(); f.Put("a", [2]); var b = await f.Build();
             string one = Path.Combine(f.Root, a.Outputs[0]), two = Path.Combine(f.Root, b.Outputs[0]);
             File.SetLastWriteTimeUtc(one, DateTime.UtcNow.AddYears(1)); File.SetLastWriteTimeUtc(two, DateTime.UtcNow.AddYears(-1));
-            using (var set = AssetPackageSet.OpenDirectory(f.Output)) { using var d = set.Read("common/data/a"); Check.Bytes([2], d.Data.Span); }
+            using (var set = PackageSet.OpenDirectory(f.Output)) { using var d = set.Read("common/data/a"); Check.Bytes([2], d.Data.Span); }
             string dir = Path.Combine(f.Root, "ordered"); Directory.CreateDirectory(dir); File.Copy(one, Path.Combine(dir, "z.asset")); File.Copy(two, Path.Combine(dir, "a.asset"));
             Fixture.RewriteHeader(Path.Combine(dir, "a.asset"), h => h with { BuildTicks = a.BuildTimeUtc.UtcTicks });
             Directory.CreateDirectory(Path.Combine(dir, ".incomplete.tmp")); File.WriteAllText(Path.Combine(dir, ".incomplete.tmp", "bad.asset"), "unfinished");
-            using var tied = AssetPackageSet.OpenDirectory(dir); using var data = tied.Read("common/data/a"); Check.Bytes([1], data.Data.Span);
+            using var tied = PackageSet.OpenDirectory(dir); using var data = tied.Read("common/data/a"); Check.Bytes([1], data.Data.Span);
         });
         Test("paged path index and multi-page metadata", async () =>
         {
             using var f = new Fixture(); for (int i = 0; i < 550; i++) f.Put($"file{i:D4}", [(byte)i]); f.Text("file0000.meta", "text=" + new string('中', 50000)); await f.Build();
-            using var set = AssetPackageSet.OpenDirectory(f.Output, new AssetReadOptions { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
+            using var set = PackageSet.OpenDirectory(f.Output, new ReadOptions { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
             Check.Equal(550, set.Enumerate().Count()); Check.Equal(50000, set.ReadMetadata("common/data/file0000").GetString("text").Length);
             using var data = set.Read("common/data/file0549"); Check.Bytes([(byte)(549 % 256)], data.Data.Span);
         });
         Test("parallel reads, cancellation recovery and reader lifetimes", async () =>
         {
             using var f = new Fixture(true, true); byte[] expected = new byte[1_100_123]; new Random(7).NextBytes(expected); f.Put("a", expected); f.Text("a.meta", "n=42"); await f.Build();
-            var set = await AssetPackageSet.OpenDirectoryAsync(f.Output, f.ReadOptions);
+            var set = await PackageSet.OpenDirectoryAsync(f.Output, f.ReadOptions);
             await Parallel.ForEachAsync(Enumerable.Range(0, 128), new ParallelOptions { MaxDegreeOfParallelism = 8 }, async (i, ct) =>
             { byte[] b = new byte[4096]; int offset = i * 7919 % (expected.Length - b.Length); Check.Equal(b.Length, await set.ReadAtAsync("common/data/a", offset, b, ct)); Check.Bytes(expected.AsSpan(offset, b.Length), b); });
             Parallel.For(0, 64, i => { byte[] b = new byte[16]; set.ReadAt("common/data/a", i * 1000, b); Check.Bytes(expected.AsSpan(i * 1000, 16), b); });
@@ -113,7 +113,7 @@ internal static class Suite
         Test("buffer limit and mapped backend correctness", async () =>
         {
             using var f = new Fixture(); byte[] data = Enumerable.Range(0, 70000).Select(i => (byte)i).ToArray(); f.Put("a", data); await f.Build();
-            using var set = AssetPackageSet.OpenDirectory(f.Output, new AssetReadOptions { MaxBufferedAssetBytes = 8, ReadMode = AssetReadMode.MemoryMapped });
+            using var set = PackageSet.OpenDirectory(f.Output, new ReadOptions { MaxBufferedAssetBytes = 8, ReadMode = AssetReadMode.MemoryMapped });
             Check.Throws<InvalidOperationException>(() => set.Read("common/data/a")); byte[] range = new byte[128]; await set.ReadAtAsync("common/data/a", 65530, range); Check.Bytes(data.AsSpan(65530, 128), range);
             using var output = new MemoryStream(); await set.CopyToAsync("common/data/a", output); Check.Bytes(data, output.ToArray());
         });
@@ -121,12 +121,12 @@ internal static class Suite
         {
             using var f = new Fixture(false); f.Put("a", [1, 2, 3, 4]); f.Text("a.meta", "name=hidden"); var tag = await f.Build(); string file = Path.Combine(f.Root, tag.Outputs[0]); byte[] original = File.ReadAllBytes(file);
             var header = PackageHeader.Decode(original.AsSpan(0, 4096), original.Length); var damaged = original.ToArray(); damaged[32] ^= 1; File.WriteAllBytes(file, damaged);
-            Check.Throws<InvalidDataException>(() => AssetPackageSet.OpenDirectory(f.Output));
+            Check.Throws<InvalidDataException>(() => PackageSet.OpenDirectory(f.Output));
             damaged = original.ToArray(); damaged[(int)header.MetadataOffset] ^= 1; File.WriteAllBytes(file, damaged);
-            using (var set = AssetPackageSet.OpenDirectory(f.Output)) { Check.True(set.Contains("common/data/a")); Check.Throws<CryptographicException>(() => set.ReadMetadata("common/data/a")); }
+            using (var set = PackageSet.OpenDirectory(f.Output)) { Check.True(set.Contains("common/data/a")); Check.Throws<CryptographicException>(() => set.ReadMetadata("common/data/a")); }
             damaged = original.ToArray(); damaged[^1] ^= 1; File.WriteAllBytes(file, damaged);
-            using (var set = AssetPackageSet.OpenDirectory(f.Output)) { Check.Throws<InvalidDataException>(() => set.Read("common/data/a")); Check.Throws<InvalidDataException>(() => set.Verify()); }
-            File.WriteAllBytes(file, original[..^1]); Check.Throws<InvalidDataException>(() => AssetPackageSet.OpenDirectory(f.Output));
+            using (var set = PackageSet.OpenDirectory(f.Output)) { Check.Throws<InvalidDataException>(() => set.Read("common/data/a")); Check.Throws<InvalidDataException>(() => set.Verify()); }
+            File.WriteAllBytes(file, original[..^1]); Check.Throws<InvalidDataException>(() => PackageSet.OpenDirectory(f.Output));
         });
         Test("changed source fails without publishing", async () =>
         {
@@ -147,16 +147,16 @@ internal static class Suite
         });
         Sync("zero third-party assembly dependencies and embedded licenses", () =>
         {
-            foreach (var assembly in new[] { typeof(AssetPackageSet).Assembly, typeof(ProjectBuilder).Assembly })
+            foreach (var assembly in new[] { typeof(PackageSet).Assembly, typeof(ProjectBuilder).Assembly })
             foreach (var r in assembly.GetReferencedAssemblies()) Check.True(r.Name == "Quire.Package" || r.Name!.StartsWith("System", StringComparison.Ordinal) || r.Name == "Microsoft.CSharp", r.FullName);
-            Check.Equal(2, typeof(AssetPackageSet).Assembly.GetManifestResourceNames().Count(x => x.Contains("LICENSE", StringComparison.Ordinal)));
+            Check.Equal(2, typeof(PackageSet).Assembly.GetManifestResourceNames().Count(x => x.Contains("LICENSE", StringComparison.Ordinal)));
         });
         Test("multiple packages share Tag/time; duplicate source mapping fails", async () =>
         {
             using var f = new Fixture(); f.Put("a", [1]);
             File.AppendAllText(f.ProjectPath, "  - name: second\n    sources:\n      - directory: ./input\n        prefix: other/data\n");
             var tag = await f.Build(); Check.Equal(2, tag.Outputs.Length);
-            using (var set = AssetPackageSet.OpenDirectory(f.Output))
+            using (var set = PackageSet.OpenDirectory(f.Output))
             { Check.Equal(2, set.Packages.Count); Check.True(set.Packages.All(p => p.TagId == tag.TagId && p.BuildTimeUtc == tag.BuildTimeUtc)); Check.True(set.Contains("other/data/a")); }
             File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("prefix: common/data", "prefix: common/data\n      - directory: ./input\n        prefix: common/data"));
             await Check.ThrowsAsync<InvalidDataException>(() => f.Build()); Check.Equal(1, TagStore.List(f.Config().StateDirectory).Count());
@@ -164,17 +164,17 @@ internal static class Suite
         Test("Unicode path sorting, source-root project state exclusion and empty Meta", async () =>
         {
             using var f = new Fixture(); f.Put("\ue000", [1]); f.Put("😀", [2]); f.Text("😀.meta", "a=1"); var a = await f.Build();
-            using (var set = AssetPackageSet.OpenDirectory(f.Output))
+            using (var set = PackageSet.OpenDirectory(f.Output))
             { using var x = set.Read("common/data/😀"); Check.Bytes([2], x.Data.Span); Check.Equal(2, set.Enumerate().Count()); }
             f.Text("😀.meta", ""); var b = await f.Build(a.TagId); Check.Equal(1, b.MetadataChanges);
-            using (var set = AssetPackageSet.OpenDirectory(f.Output)) { Check.True(set.GetInfo("common/data/😀").HasMetadata); Check.Equal(0, set.ReadMetadata("common/data/😀").Count); }
+            using (var set = PackageSet.OpenDirectory(f.Output)) { Check.True(set.GetInfo("common/data/😀").HasMetadata); Check.Equal(0, set.ReadMetadata("common/data/😀").Count); }
             File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("directory: ./input", "directory: ."));
             var current = await SourceScanner.ScanAsync(f.Config(), 4, default);
             Check.True(current.All(x => !x.Path.Contains("/.asset/", StringComparison.Ordinal) && !x.Path.Contains("/dist/", StringComparison.Ordinal)));
         });
         Test("array TryGet methods and exact mixed numeric conversion", () =>
         {
-            var m = new AssetMetadata(PropertyMetadata.Parse("n=[9007199254740992,1.5]\ni=[1]\nb=[true]\ns=[\"x\"]"));
+            var m = new Metadata(PropertyMetadata.Parse("n=[9007199254740992,1.5]\ni=[1]\nb=[true]\ns=[\"x\"]"));
             Check.True(m.TryGetDoubleArray("n", out var d) && d[0] == 9007199254740992d);
             Check.True(m.TryGetInt64Array("i", out var i) && i[0] == 1);
             Check.True(m.TryGetBooleanArray("b", out var b) && b[0]); Check.True(m.TryGetStringArray("s", out var s) && s![0] == "x");
@@ -185,7 +185,7 @@ internal static class Suite
             using var f = new Fixture(true, true); f.Put("a", new byte[400000]); var tag = await f.Build();
             string file = Path.Combine(f.Root, tag.Outputs[0]); byte[] disk = File.ReadAllBytes(file);
             disk[^1] ^= 1; File.WriteAllBytes(file, disk);
-            using var set = AssetPackageSet.OpenDirectory(f.Output, f.ReadOptions);
+            using var set = PackageSet.OpenDirectory(f.Output, f.ReadOptions);
             await Check.ThrowsAsync<CryptographicException>(async () => { using var ignored = await set.ReadAsync("common/data/a"); });
         });
         if (args.Contains("--large"))
@@ -199,11 +199,11 @@ internal static class Suite
                 long[] positions = [0, (1L << 31) - 11, (1L << 31) + 7, (1L << 32) - 9, (1L << 32) + 3, length - 1];
                 using (var source = new FileStream(Path.Combine(f.Input, "huge.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 { SparseFile.Enable(source.SafeFileHandle); source.SetLength(length); for (int i = 0; i < positions.Length; i++) { source.Position = positions[i]; source.WriteByte((byte)(i + 41)); } source.Flush(true); }
-                await f.Build(); using var set = AssetPackageSet.OpenDirectory(f.Output, f.ReadOptions with { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
+                await f.Build(); using var set = PackageSet.OpenDirectory(f.Output, f.ReadOptions with { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
                 Check.Equal(length, set.GetInfo("common/data/huge.bin").Length);
                 for (int i = 0; i < positions.Length; i++) { byte[] b = new byte[1]; Check.Equal(1, await set.ReadAtAsync("common/data/huge.bin", positions[i], b)); Check.Equal((byte)(i + 41), b[0]); }
                 using var stream = set.OpenRead("common/data/huge.bin"); stream.Seek(-1, SeekOrigin.End); Check.Equal(46, stream.ReadByte()); Check.Equal(-1, stream.ReadByte());
-                using var mapped = AssetPackageSet.OpenDirectory(f.Output, f.ReadOptions with { ReadMode = AssetReadMode.MemoryMapped });
+                using var mapped = PackageSet.OpenDirectory(f.Output, f.ReadOptions with { ReadMode = AssetReadMode.MemoryMapped });
                 byte[] tail = new byte[1]; Check.Equal(1, await mapped.ReadAtAsync("common/data/huge.bin", length - 1, tail)); Check.Equal((byte)46, tail[0]);
                 string extracted = Path.Combine(f.Root, "unpacked");
                 await Quire.Cli.Extraction.PackageExtractor.ExtractAsync(f.Output, extracted, f.ReadOptions with { MaxBufferedAssetBytes = 0 }, default);
