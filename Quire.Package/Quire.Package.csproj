@@ -9,6 +9,8 @@
     <PackageProjectUrl>https://github.com/l2060/Quire</PackageProjectUrl>
     <Title>Quire.Package</Title>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Quire.Cli" />

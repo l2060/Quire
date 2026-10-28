@@ -1,0 +1,74 @@
+{
+  "RecordedAtUtc": "2026-10-28T12:26:23.1091889+00:00",
+  "Runtime": ".NET 10.0.14",
+  "Architecture": "X64",
+  "Count": 100000,
+  "PathCharacters": 48,
+  "Repetitions": 3,
+  "EntryRecordBytes": 104,
+  "EquivalentResolvedRowBytes": 224,
+  "ProposedMergedRowBytes": 24,
+  "ProposedDirectoryNode32Bytes": 32,
+  "ProposedDirectoryNode40Bytes": 40,
+  "PreallocatedDictionaryCapacity": 108631,
+  "Measurements": [
+    {
+      "Name": "MergedRow array",
+      "AllocatedBytes": 2400024,
+      "BytesPerItem": 24.00024
+    },
+    {
+      "Name": "DirectoryNode32 array",
+      "AllocatedBytes": 3200024,
+      "BytesPerItem": 32.00024
+    },
+    {
+      "Name": "DirectoryNode40 array",
+      "AllocatedBytes": 4000024,
+      "BytesPerItem": 40.00024
+    },
+    {
+      "Name": "EntryRecord array",
+      "AllocatedBytes": 10400024,
+      "BytesPerItem": 104.00024
+    },
+    {
+      "Name": "ResolvedRow array",
+      "AllocatedBytes": 22400024,
+      "BytesPerItem": 224.00024
+    },
+    {
+      "Name": "int adjacency IDs",
+      "AllocatedBytes": 400024,
+      "BytesPerItem": 4.00024
+    },
+    {
+      "Name": "48-character ASCII keys with reference array",
+      "AllocatedBytes": 12800024,
+      "BytesPerItem": 128.00024
+    },
+    {
+      "Name": "Dictionary\u003Cstring,int\u003E, excluding existing keys",
+      "AllocatedBytes": 3041800,
+      "BytesPerItem": 30.418
+    },
+    {
+      "Name": "Dictionary\u003Cstring,MergedRow\u003E, excluding existing keys",
+      "AllocatedBytes": 4779896,
+      "BytesPerItem": 47.79896
+    },
+    {
+      "Name": "Dictionary\u003Cstring,ResolvedRow\u003E, excluding existing keys",
+      "AllocatedBytes": 26506096,
+      "BytesPerItem": 265.06096
+    }
+  ],
+  "Notes": [
+    "Minimum managed allocated bytes of three repetitions on the current thread; not retained heap size, process RSS, lookup speed or a production-index implementation.",
+    "Dictionaries are preallocated and reuse existing keys. Key-string allocation is reported separately with its reference array.",
+    "Every sample path has 48 ASCII characters. Unicode UTF-8 byte lengths and string lengths can differ.",
+    "Array measurements include their managed object headers. Dictionary capacities and overhead change with element count and runtime.",
+    "Only EntryRecord is an existing runtime index representation. ResolvedRow reproduces the existing private resolved value\u0027s field types. MergedRow and directory nodes are hypothetical compact layouts.",
+    "Compact references assume existing package indexes remain available. Direct-file adjacency IDs and any optional hash table are additional storage. No full path-string pool is included in compact-row sizes."
+  ]
+}

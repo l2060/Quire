@@ -9,35 +9,43 @@ internal static class PackageExtractor
 {
     internal static int DefaultJobs => Math.Min(Environment.ProcessorCount, 8);
 
-    internal static async Task<(long Assets, long MetadataFiles)> ExtractAsync(string sourceDirectory, string destinationDirectory,
-        ReadOptions options, CancellationToken token, int? jobs = null, IOperationProgress? progress = null)
+    internal static async Task<(long Assets, long MetadataFiles)> ExtractAsync(string sourceDirectory, string destinationDirectory, ReadOptions options, CancellationToken token, int? jobs = null, IOperationProgress? progress = null)
     {
         token.ThrowIfCancellationRequested();
         int concurrency = jobs ?? DefaultJobs;
-        if (concurrency is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(jobs), "Extraction jobs must be between 1 and 256.");
+        if (concurrency is < 1 or > 256)
+            throw new ArgumentOutOfRangeException(nameof(jobs), "Extraction jobs must be between 1 and 256.");
         string source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceDirectory));
         string destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationDirectory));
         if (ProjectConfig.Within(source, destination) || ProjectConfig.Within(destination, source))
             throw new ArgumentException("Source and destination directories must not overlap.");
-        RejectLinks(source); RejectLinks(destination);
+        RejectLinks(source);
+        RejectLinks(destination);
         RequireEmpty(destination);
         progress ??= options.Progress;
-        if (progress is not null) options = options with { Progress = progress };
-        using var packages = await PackageSet.OpenDirectoryAsync(source, options, token).ConfigureAwait(false);
-        if (packages.Packages.Count == 0) throw new InvalidDataException($"No .asset packages found in '{source}'.");
+        if (progress is not null)
+            options = options with
+            {
+                Progress = progress
+            };
+        using var packages = await PackageSet.OpenAsync(source, options, token).ConfigureAwait(false);
+        if (packages.Packages.Count == 0)
+            throw new InvalidDataException($"No .asset packages found in '{source}'.");
         if (progress is not null)
         {
             progress.StartStage("Preparing extraction");
             long totalBytes = 0, totalFiles = 0;
-            foreach (var asset in packages.Enumerate())
+            foreach (var asset in packages.EnumerateFiles())
             {
                 token.ThrowIfCancellationRequested();
                 totalBytes = checked(totalBytes + asset.Length);
                 totalFiles = checked(totalFiles + 1 + (asset.HasMetadata ? 1 : 0));
             }
+
             // Content bytes drive the bar; sidecars also contribute to file completion and I/O.
             progress.StartStage("Extracting", totalBytes, totalFiles);
         }
+
         string parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);
         string staging = Path.Combine(parent, ".asset-unpackage-" + Guid.NewGuid().ToString("N") + ".tmp");
@@ -45,7 +53,7 @@ internal static class PackageExtractor
         long assets = 0, metadataFiles = 0;
         try
         {
-            await Parallel.ForEachAsync(packages.Enumerate(), new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = token }, async (asset, ct) =>
+            await Parallel.ForEachAsync(packages.EnumerateFiles(), new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = token }, async (asset, ct) =>
             {
                 string path = DestinationPath(staging, asset.Path);
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -61,25 +69,30 @@ internal static class PackageExtractor
                             await writer.WriteAsync(PropertyMetadata.Format(metadata).AsMemory(), ct).ConfigureAwait(false);
                         progress?.AddWritten(file.Position);
                     }
+
                     Interlocked.Increment(ref metadataFiles);
                     progress?.Advance(files: 1);
                 }
+
                 Interlocked.Increment(ref assets);
             }).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             progress?.StartStage("Publishing extraction");
             RejectLinks(destination);
             RequireEmpty(destination);
-            if (Directory.Exists(destination)) Directory.Delete(destination);
+            if (Directory.Exists(destination))
+                Directory.Delete(destination);
             Directory.Move(staging, destination);
             return (assets, metadataFiles);
         }
-        finally { if (Directory.Exists(staging)) Directory.Delete(staging, true); }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, true);
+        }
     }
 
-    private static FileStream CreateFile(string path) => new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-        65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-
+    private static FileStream CreateFile(string path) => new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
     private static void RequireEmpty(string directory)
     {
         if (File.Exists(directory) || (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any()))
@@ -91,9 +104,19 @@ internal static class PackageExtractor
         for (DirectoryInfo? directory = new(path); directory is not null; directory = directory.Parent)
         {
             FileAttributes attributes;
-            try { attributes = File.GetAttributes(directory.FullName); }
-            catch (FileNotFoundException) { continue; }
-            catch (DirectoryNotFoundException) { continue; }
+            try
+            {
+                attributes = File.GetAttributes(directory.FullName);
+            }
+            catch (FileNotFoundException)
+            {
+                continue;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                continue;
+            }
+
             if ((attributes & FileAttributes.ReparsePoint) != 0)
                 throw new IOException($"Extraction paths must not contain symbolic links or junctions: {directory.FullName}");
         }
@@ -107,15 +130,15 @@ internal static class PackageExtractor
             foreach (string segment in assetPath.Split('/'))
             {
                 string name = segment.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
-                bool device = name is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$" ||
-                    (name.Length == 4 && (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal)) &&
-                     "123456789¹²³".Contains(name[3]));
+                bool device = name is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$" || (name.Length == 4 && (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal)) && "123456789¹²³".Contains(name[3]));
                 if (segment.EndsWith(' ') || segment.EndsWith('.') || device)
                     throw new InvalidDataException($"Asset path cannot be extracted on Windows: {assetPath}");
             }
         }
+
         string path = Path.GetFullPath(Path.Combine(root, assetPath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!ProjectConfig.Within(path, root) || path == root) throw new InvalidDataException($"Asset path escapes the destination: {assetPath}");
+        if (!ProjectConfig.Within(path, root) || path == root)
+            throw new InvalidDataException($"Asset path escapes the destination: {assetPath}");
         return path;
     }
 }

@@ -237,15 +237,17 @@ using System.Text;
 using Quire.Package;
 
 string directory = args.Length > 0 ? args[0] : "./MyAssets/dist";
-using var assets = await PackageSet.OpenDirectoryAsync(directory);
+using var assets = await PackageSet.OpenAsync(directory);
 
 const string path = "common/data/settings.txt";
-AssetInfo info = assets.GetInfo(path);
+AssetInfo info = assets.GetFileInfo(path);
 Console.WriteLine($"{info.Path}: {info.Length} bytes");
 
 Metadata meta = await assets.ReadMetadataAsync(path);
-if (meta.TryGetString("name", out var name)) Console.WriteLine($"Name: {name}");
-if (meta.TryGetInt64("revision", out var revision)) Console.WriteLine($"Revision: {revision}");
+if (meta.TryGetString("name", out var name))
+    Console.WriteLine($"Name: {name}");
+if (meta.TryGetInt64("revision", out var revision))
+    Console.WriteLine($"Revision: {revision}");
 
 using AssetData file = await assets.ReadAsync(path);
 Console.WriteLine(Encoding.UTF8.GetString(file.Data.Span));
@@ -444,26 +446,36 @@ quire-cli unpackage ./encrypted-dist ./unpacked -pwd-env QUIRE_KEY -jobs 4
 ```csharp
 using Quire.Package;
 
-using var assets = await PackageSet.OpenDirectoryAsync("./MyAssets/dist");
+using var assets = await PackageSet.OpenAsync("./MyAssets/dist");
 const string path = "common/data/settings.txt";
 
 foreach (AssetPackageInfo package in assets.Packages)
     Console.WriteLine($"{package.TagId} | {package.BuildTimeUtc:O} | {package.FilePath}");
 
-foreach (AssetInfo asset in assets.Enumerate("common/data", recursive: true))
+foreach (AssetInfo asset in assets.EnumerateFiles("common/data", recursive: true))
     Console.WriteLine($"{asset.Path}: {asset.Length} bytes, meta={asset.HasMetadata}");
 
-if (!assets.TryGetInfo(path, out AssetInfo info))
+// 只枚举直接子目录；省略 recursive 参数则枚举全部后代目录。
+foreach (string directory in assets.EnumerateDirectories("common/data", recursive: false))
+    Console.WriteLine(directory);
+
+if (!assets.TryGetFileInfo(path, out AssetInfo info))
     throw new FileNotFoundException("Resource was not found.", path);
 ```
 
-同步打开使用 `PackageSet.OpenDirectory(directory, options)`。集合应通过 `using` 或 `await using` 释放。打开目录会读取包头和必要索引，不会一次加载全部资源内容。
+同步打开使用 `PackageSet.Open(directory, options)`。集合应通过 `using` 或 `await using` 释放。打开目录会读取包头和必要索引，不会一次加载全部资源内容。
 
 默认递归扫描 `.asset` 文件；跳过 `.asset` 状态目录、以 `.tmp` 结尾的暂存目录和符号链接。`ReadOptions.Recursive=false` 可限制为当前目录。不可读的包、缺少密码或打开阶段发现的格式损坏会使打开失败，并报告具体文件；完整数据检查使用 `VerifyAsync`。
 
-`Enumerate()` 枚举所有有效文件；`Enumerate("common/data", false)` 仅枚举该虚拟目录的直接子文件。`Contains(path)` 仅判断是否存在，`GetInfo(path)` 在不存在时抛出 `FileNotFoundException`，`TryGetInfo` 则返回 `false`。查询只访问必要索引，不读取资源内容。
+`EnumerateFiles()` 枚举所有有效文件；`EnumerateFiles("common/data", false)` 仅枚举该虚拟目录的直接子文件。`FileExists(path)` 仅判断是否存在，`GetFileInfo(path)` 在不存在时抛出 `FileNotFoundException`，`TryGetFileInfo` 则返回 `false`。查询只访问必要索引，不读取资源内容。
 
-包内路径区分大小写，使用 `/` 分隔，包含打包配置的 `prefix`，例如 `common/data/settings.txt`。路径不能以 `/` 开头或结尾，不能包含反斜杠、空段、`.` 或 `..`；查询根目录使用 `Enumerate()`。
+`EnumerateDirectories()` 枚举根目录的全部后代目录；`EnumerateDirectories("common/data", false)` 仅枚举指定目录的直接子目录。结果是完整包内路径，不带末尾 `/`，不包含所查询的目录自身。`DirectoryExists(directory)` 判断目录是否包含有效文件，根目录 `""` 始终存在。目录由有效文件推导，空目录和孤立 Meta-only 记录不会产生目录；跨包合并后，同一路径可以同时存在文件与目录。
+
+文件按 UTF-8 路径排序；目录按追加 `/` 后的 UTF-8 前缀排序，例如 `a-b` 位于 `a` 之前。不存在的目录枚举为空。打开时自动在预算内建立统一文件索引与目录树，枚举直接遍历对应范围或子项；超预算时自动回退到逐包二分定位和有界范围合并。只为返回的路径创建字符串，不缓存全量路径对象。直接 `foreach` 使用具体枚举类型，避免接口装箱；LINQ / `IEnumerable` 仍可用，但会产生相应开销。枚举器在开始枚举时持有包引用，提前退出请使用 `foreach` 或显式 `Dispose`。
+
+旧的 `Enumerate`、`Contains`、`GetInfo`、`TryGetInfo` 已移除，分别改用 `EnumerateFiles`、`FileExists`、`GetFileInfo`、`TryGetFileInfo`。
+
+包内路径区分大小写，使用 `/` 分隔，包含打包配置的 `prefix`，例如 `common/data/settings.txt`。路径不能以 `/` 开头或结尾，不能包含反斜杠、空段、`.` 或 `..`；查询根目录使用 `EnumerateFiles()`。
 
 ### 读取文件内容
 
@@ -487,16 +499,22 @@ using (AssetData file = await assets.ReadAsync(path))
 
 ```csharp
 Metadata meta = await assets.ReadMetadataAsync(path);
-if (meta.TryGetString("name", out var name)) Console.WriteLine(name);
-if (meta.TryGetInt64("revision", out var revision)) Console.WriteLine(revision);
-if (meta.TryGetBoolean("enabled", out var enabled)) Console.WriteLine(enabled);
-if (meta.TryGetStringArray("tags", out var tags)) Console.WriteLine(string.Join(", ", tags));
+if (meta.TryGetString("name", out var name))
+    Console.WriteLine(name);
+if (meta.TryGetInt64("revision", out var revision))
+    Console.WriteLine(revision);
+if (meta.TryGetBoolean("enabled", out var enabled))
+    Console.WriteLine(enabled);
+if (meta.TryGetStringArray("tags", out var tags))
+    Console.WriteLine(string.Join(", ", tags));
 if (meta.TryGetInt64Array("levels", out var levels))
-    foreach (long level in levels) Console.WriteLine(level);
+    foreach (long level in levels)
+        Console.WriteLine(level);
 
 double scale = meta.TryGetDouble("scale", out double value) ? value : 1.0;
 Console.WriteLine($"Scale: {scale}");
-if (meta.TryGetValueType("name", out var type)) Console.WriteLine($"Name type: {type}");
+if (meta.TryGetValueType("name", out var type))
+    Console.WriteLine($"Name type: {type}");
 ```
 
 同步方式为 `assets.ReadMetadata(path)`。没有 Meta 时返回 `Metadata.Empty`；通过 `AssetInfo.HasMetadata` 可区分没有 Meta 和存在空 Meta。
@@ -534,7 +552,7 @@ using (AssetData file = await deferred.Value)
 
 ### 大文件、流和随机范围读取
 
-`OpenRead` 返回支持 Seek 的只读流；创建流时解析路径，实际读取时才按需读取、解密和解压资源块。长度和偏移使用 `long`，无需为大文件分配同等大小的内存。
+`OpenRead` 返回继承 `Stream` 的 `AssetReader`，支持 Seek，并通过 `Info` 提供文件信息；创建时解析一次路径，实际读取时才按需读取、解密和解压资源块。长度和偏移使用 `long`，无需为大文件分配同等大小的内存。
 
 ```csharp
 using (Stream stream = assets.OpenRead(path))
@@ -553,12 +571,25 @@ long offset = Math.Min(1024L, info.Length);
 int rangeCount = await assets.ReadAtAsync(path, offset, range);
 Console.WriteLine($"Read {rangeCount} bytes at offset {offset}.");
 
+// 高频读取同一文件：复用读取器、调用方缓冲和解码块缓存。
+using (AssetReader reader = assets.OpenRead(path))
+{
+    int count = reader.ReadAt(0, range);
+    int nextCount = await reader.ReadAtAsync(count, range);
+    // 两次 ReadAt 均不改变 reader.Position。
+    Console.WriteLine($"Read {count + nextCount} bytes.");
+}
+
 // 流式写出整个文件，缓冲大小不随资源长度增长。
 using (FileStream output = File.Create("./settings-copy.txt"))
     await assets.CopyToAsync(path, output);
 ```
 
 读取方法返回实际字节数；到达文件尾部时返回 `0`，只处理有效范围内的数据。对超过 4 GiB 的资源也使用相同 API，将示例路径替换为实际包内路径即可。同步接口为 `ReadAt` 和 `CopyTo`。
+
+完整的[大文件分块异步示例](examples/README.md#大文件分块异步读取)通过 `--large-file` 运行，演示固定池化缓冲、逐块等待消费者、Ctrl+C 取消和流式 SHA-256；文件大小不受完整缓冲读取上限影响。
+
+常驻索引下，文件查询与未分块文件的同步 `PackageSet.ReadAt` 不创建托管对象。反复读取压缩或加密文件时，优先复用 `AssetReader`；它复用缓冲、密码上下文与最近的部分解码块，完整块可直接读入、解密或解压到目标缓冲。预热后的缓存命中路径可实现零分配；首次缓冲申请、页缓存未命中、密钥组切换和真正挂起的异步 I/O 仍可能分配。完整 `Read` 仍返回需要释放的 `AssetData` 对象。实测条件和原始数据见 [枚举与读取热路径基准](benchmarks/README.md)。
 
 局部读取、流读取和 `CopyToAsync` 验证块结构及加密认证，不执行整个文件的 SHA-256 比较。需要完整检查时调用 `await assets.VerifyAsync()`，它会读取所有物理包中的内容，包括被后续包覆盖的历史资源。
 
@@ -568,7 +599,7 @@ using (FileStream output = File.Create("./settings-copy.txt"))
 
 ```csharp
 await Parallel.ForEachAsync(
-    assets.Enumerate("common/data").Where(item => item.Length <= 1024 * 1024),
+    assets.EnumerateFiles("common/data").Where(item => item.Length <= 1024 * 1024),
     new ParallelOptions { MaxDegreeOfParallelism = 4 },
     async (item, token) =>
     {
@@ -589,31 +620,111 @@ var options = new ReadOptions
     Password = Environment.GetEnvironmentVariable("GAME_ASSET_KEY"),
     Recursive = true,
     ReadMode = AssetReadMode.RandomAccess,
+    MaxMergedIndexBytes = 64L * 1024 * 1024,
     MaxBufferedAssetBytes = 32 * 1024 * 1024,
     MaxResidentIndexBytes = 64 * 1024 * 1024,
     PageCacheBytes = 8 * 1024 * 1024,
     MetadataCacheBytes = 4 * 1024 * 1024
 };
-using var encryptedAssets = await PackageSet.OpenDirectoryAsync("./encrypted-dist", options);
+using var encryptedAssets = await PackageSet.OpenAsync("./encrypted-dist", options);
 ```
 
 未加密的目录不需要设置 `Password`。不同包使用不同密码时，可设置 `PasswordProvider` 回调，根据 `AssetPackageInfo.FilePath` 或 `TagId` 返回密码。
 
-| 选项 | 默认值 | 含义 |
+| 选项 | 默认值 | 作用范围与设置建议 |
 | --- | --- | --- |
-| `Password` / `PasswordProvider` | null | 公共密码或按包提供密码的回调 |
-| `Recursive` | true | 是否递归发现目录中的 `.asset` 文件 |
-| `ReadMode` | `RandomAccess` | 可改为 `MemoryMapped`，按实际访问负载选择 |
-| `MaxBufferedAssetBytes` | 32 MiB | 单次 `Read/ReadAsync` 的完整加载上限 |
-| `MaxResidentIndexBytes` | 每包 64 MiB | 常驻索引上限，超过时按页访问 |
-| `PageCacheBytes` | 每包 8 MiB | 目录、Meta 和块表的页缓存预算 |
-| `MetadataCacheBytes` | 整个集合 4 MiB | 已读取 Meta 的编码字节缓存预算 |
+| `ReadMode` | `RandomAccess` | 文件内容和未命中的索引页使用的 I/O 后端。热缓存下频繁小块读取可选 `MemoryMapped`；需要真正异步 I/O 时选 `RandomAccess`，详见下表 |
+| `MaxMergedIndexBytes` | 整个集合 64 MiB | 自动构建统一索引的数组数据区预算，独立于原包索引。超预算或数组容量时自动回退到逐包查询；0 不分配统一索引数组。不含数组对象头、少量管理对象和构建暂存 |
+| `Password` | null | 所有加密包共用的密码；未加密包无需设置 |
+| `PasswordProvider` | null | 按包返回密码，优先于 `Password`；返回 null 时回退到 `Password`。不同包使用不同密码时设置 |
+| `Recursive` | true | 递归发现磁盘目录内的 `.asset` 包；设为 false 仅打开当前磁盘目录。与 `EnumerateFiles` / `EnumerateDirectories` 的包内递归参数互不影响 |
+| `MaxBufferedAssetBytes` | 32 MiB | 每次 `Read/ReadAsync` 的完整文件长度上限；超出时抛异常。大文件优先使用 `OpenRead` / `ReadAt` / `CopyTo`，无需调高；0 仍允许空文件 |
+| `MaxResidentIndexBytes` | 每包 64 MiB | 完整路径与文件记录索引不超过此值时整体载入；超过则整体改用分页，不会只保留前 64 MiB。高频查询且内存充足时可提高；0 使非空索引分页 |
+| `PageCacheBytes` | 每包 8 MiB | 分别取预算的三分之一用于路径索引、Meta 和块表，每部分按 64 KiB 页向下取整。分页索引或频繁跨块读取可提高；0 不保留页，但每次未命中仍须读取、分配和解密页 |
+| `MetadataCacheBytes` | 整个集合 4 MiB | 已解析 Meta 按编码字节长度计费的缓存预算；高频重复读取 Meta 时可提高。0 不保留非空编码的 Meta；解码后的字符串、数组和对象开销不计入预算 |
 
-这些限制不是进程总内存上限；并发结果、解码字符串和调用者长期持有的对象另占内存。内存映射的适用情况见[并行构建与性能](#并行构建与性能)。
+这些限制不是进程总内存上限。并发结果、池化缓冲的取整容量、解码对象、在途页和调用者保留的结果另占内存。`MaxResidentIndexBytes` 与 `PageCacheBytes` 都是每包预算：20 个各有 40 MiB 索引的包会常驻约 800 MiB 索引，而不是整个集合共用 64 MiB。常驻索引建立后不再使用该包的路径页缓存；Meta 和块表仍有独立页缓存。打开时还会遍历全部文件记录和路径做格式、排序校验，分页模式也会进行这项校验。
+
+| 访问场景 | 建议模式 | 原因与边界 |
+| --- | --- | --- |
+| 资源集经常重复访问，热缓存下大量同步小块读取 | `MemoryMapped` | 本机此负载下更快，减少逐次读取的系统调用；适合在工作线程上进行资源读取 |
+| 首次加载、冷盘、较大资源集，需要用异步 I/O 释放调用线程 | `RandomAccess` + 异步 API | 文件 I/O 未完成时可挂起；`MemoryMapped` 的 `ReadAsync` 可能同步完成，也可能因缺页阻塞调用线程 |
+| 许多并发任务读取不同文件或区间 | 从 `RandomAccess` + 有界并发开始 | 可显式控制在途 I/O；两种模式最终吞吐仍取决于磁盘、工作集和访问模式，需用实际负载比较 |
+| 同一压缩/加密块内反复读取 | 任一模式，优先复用 `AssetReader` | 命中读取器解码缓存后基本不再访问文件后端；复用收益通常比切换后端更重要 |
+| 顺序扫描、解包或完整校验大文件 | 从 `RandomAccess` + 流式读取开始 | 内存不随单个文件大小增长；本次小块热缓存基准不能证明顺序扫描时哪种模式更快 |
+| 仅做文件查询或目录枚举，且路径索引常驻 | 两种模式通常差异很小 | 查询已在托管内存中的索引，选择后端主要影响打开过程、页缓存未命中及内容读取 |
+
+`MemoryMapped` 映射文件的虚拟地址空间，不会一次将整个包复制进托管堆，也不保证全部驻留物理内存；实际触碰的页仍占用工作集。两种模式都能利用操作系统文件缓存。映射模式也仍有索引解密和内容复制/解码缓冲，不等同于零复制。低延迟线程应避免直接承受首次缺页；真正的后端异步不意味着整个调用中的路径查找和 CPU 解码都不会同步执行。
+
+例如，已预热的客户端资源读取可使用：
+
+```csharp
+var options = new ReadOptions
+{
+    ReadMode = AssetReadMode.MemoryMapped,
+    MaxResidentIndexBytes = 64 * 1024 * 1024
+};
+using var assets = PackageSet.Open("./dist", options);
+using AssetReader reader = assets.OpenRead("common/data/texture.bin");
+byte[] buffer = new byte[4096];
+int read = reader.ReadAt(0, buffer);
+```
+
+同一文件的后续范围读取复用 `reader` 与 `buffer`。每个并发操作使用独立读取器；选择 `RandomAccess` 时，使用 `OpenAsync`、`ReadAtAsync` 等异步 API 才能利用异步 I/O。相关实测见[读取基准](benchmarks/README.md)。
+
+### 现有索引与统一索引的内存取舍
+
+每个包包含按 UTF-8 路径排序的文件索引，记录大小固定为 128 字节，路径集中存放为 UTF-8 字节。集合打开时会自动在预算内合并覆盖关系，建立统一的有序文件表、目录树和直接子文件链。统一索引引用原包的路径与记录，不复制所有路径字符串；它和原有索引是叠加关系。
+
+统一索引默认使用整个集合 64 MiB 的数组数据区预算，由 `MaxMergedIndexBytes` 调整。构建前先计数；超出预算或支持的数组容量时，自动使用逐包查询，文件和目录 API 的结果保持一致。应用可通过 `IndexInfo.IsMerged` 查看是否已建立统一索引，通过 `IndexInfo.IsFallback` 观察回退。
+
+I/O 或认证失败、损坏索引和取消不会被自动回退掩盖，仍使打开失败。自动索引策略与 `ReadMode` 独立，随机访问和内存映射后端都能使用统一索引。CLI 构建后的物理包校验以及 `verify` 命令会在内部跳过不需要的统一索引构建。
+
+统一索引中的 `FileExists`、`GetFileInfo`、按路径的 `ReadAt` 和 `OpenRead` 只查一份有序表，文件定位约为 `O(log F)`；目录定位约为 `O(log D)`。定位目录后，递归文件枚举遍历连续文件范围，直接文件枚举沿直接子文件链，目录枚举遍历目录节点。目录枚举不再扫描其范围内的文件来推导目录，也不逐包合并重复路径。不存在独立空目录记录，孤立 Meta-only 条目不会建立文件或目录；文件与目录同名仍可同时存在。
+
+自动回退到逐包查询后，按路径查找最坏约为 `O(P × log n)`，其中 P 为包数、n 为每包记录数；枚举在各包定位前缀范围后合并候选项，递归目录枚举需要检查范围内文件。两种策略在索引常驻或命中页缓存时都不需要索引文件 I/O；未命中的分页索引才读取并解密所需页。已经打开的 `AssetReader` 保存内容记录，后续读取不再解析路径，但新内容块仍可能需要读取块描述符页。
+
+通常直接使用默认打开方式，再按需查看索引诊断信息：
+
+```csharp
+using var assets = PackageSet.Open("./dist");
+PackageIndexInfo index = assets.IndexInfo;
+Console.WriteLine($"Merged index: {index.IsMerged}, fallback: {index.IsFallback}");
+Console.WriteLine($"Files: {index.FileCount}, directories: {index.DirectoryCount}");
+Console.WriteLine($"Index array payload: {index.MemoryBytes} bytes");
+```
+
+`IndexInfo.IsMerged` 为 true 表示当前使用统一索引。回退到逐包查询时，`MemoryBytes` 为 0，两个计数为 null；统一索引计数只包括最终有效文件，`DirectoryCount` 不含根目录。空集合仍有一个根节点，其数据区为 40 字节。
+
+现有索引的精确主体大小为：
+
+```text
+每包索引字节数 = 128 × 该包物理记录数 + 该包所有路径的 UTF-8 字节数之和
+```
+
+按平均路径 48 字节估算，单包 1 万 / 10 万 / 100 万条记录的索引分别约 1.68 / 16.78 / 167.85 MiB。默认 64 MiB 门限约能整体容纳 38.1 万条这种记录；100 万条的单包默认使用分页。被补丁覆盖的历史记录仍占各自包的索引空间，不能用最终可见文件数直接估算所有包的总索引。上述数字不含缓存容器、Meta、块表、读取缓冲和文件内容工作集。
+
+统一索引使用三份精确大小的数组：每个可见文件 24 字节（内容/Meta 的包编号与 64 位物理记录号）、每个文件 4 字节的直接子文件链编号，以及每个目录节点 40 字节。数组数据区占用准确为：
+
+```text
+IndexInfo.MemoryBytes = 28 × 可见文件数 + 40 × (DirectoryCount + 1)
+```
+
+| 可见文件数 | 目录数（假设为文件数的 10%） | 统一文件/目录索引额外主体 |
+| --- | --- | --- |
+| 1 万 | 1,000 | 320,040 字节，约 0.31 MiB |
+| 10 万 | 1 万 | 3,200,040 字节，约 3.05 MiB |
+| 100 万 | 10 万 | 32,000,040 字节，约 30.52 MiB |
+
+以上是已实现数组布局的数据区计算，不包含原有包索引、数组对象头和少量管理对象。统一索引使用二分查找，没有额外哈希表或常驻路径字符串。为了精确分配，构建会进行两遍有序合并，暂存按包数和路径深度增长；不会先为所有物理记录创建 List 再复制到最终数组。第一遍超出预算便停止并自动回退，两遍均支持取消。最终节点编号受 .NET 数组容量限制，原包记录号和数据偏移仍为 64 位。
+
+统一索引会增加打开时间，重复查询可以摊销这项成本。若原包 UTF-8 索引按页加载，路径比较和获取文件记录仍可能触发页读取；希望查询完全在内存中，应为必要的原包索引设置足够的 `MaxResidentIndexBytes`。索引建立与查询的实测比较见 [统一索引基准](benchmarks/README.md)。
+
+另有一份 [.NET x64 索引表示内存测量](benchmarks/README.md#索引表示的内存测量)，用于核实结构体、数组和字典的量级。以 10 万项、48 字符 ASCII 路径为例：紧凑文件引用数组约 24 字节/项；若改为字符串字典保存完整的内容与 Meta 解析记录，字典本身约 265 字节/项，再加约 120 字节/路径字符串，合计约 385 字节/文件，尚未包含目录索引和原有包索引。因此更推荐紧凑数组和路径复用；这些数值是指定数据规模下的分配测量，不是任意规模的固定常驻开销。
 
 ### 基础包和补丁的加载顺序
 
-排序先按包头时间，再按相对文件路径的 Ordinal 顺序。较晚内容记录覆盖内容与 Meta，较晚 Meta-only 记录只覆盖 Meta。找不到任何内容的孤立 Meta-only 路径不会成为可读资源。枚举返回有效文件，目录由路径前缀查询，不维护空目录记录。
+排序先按包头时间，再按相对文件路径的 Ordinal 顺序。较晚内容记录覆盖内容与 Meta，较晚 Meta-only 记录只覆盖 Meta。找不到任何内容的孤立 Meta-only 路径不会成为可读资源。文件与目录分别枚举，目录由有效文件路径推导，不维护空目录记录。
 
 未出现在补丁中的路径保持已加载的状态。例如先加载 A(a=1)、B(a=2)，再加载基于 A 生成且省略 a 的 C，结果仍为 a=2。运行库不会推断应移除哪些包；连续发布通常以上次发布 Tag 为比较基准。
 
