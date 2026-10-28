@@ -12,6 +12,7 @@ public sealed record ReadOptions
     public int MaxResidentIndexBytes { get; init; } = 64 * 1024 * 1024;
     public int PageCacheBytes { get; init; } = 8 * 1024 * 1024;
     public int MetadataCacheBytes { get; init; } = 4 * 1024 * 1024;
+    internal Internal.IOperationProgress? Progress { get; init; }
 
     internal void Validate()
     {

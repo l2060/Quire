@@ -29,7 +29,7 @@ internal sealed class PackageReader : IDisposable
         try
         {
             token.ThrowIfCancellationRequested();
-            file = new(path, options.ReadMode == AssetReadMode.MemoryMapped);
+            file = new(path, options.ReadMode == AssetReadMode.MemoryMapped, options.Progress);
             byte[] bytes = new byte[PackageHeader.Size];
             if (asynchronous) await file.ReadAsync(bytes, 0, token).ConfigureAwait(false); else file.Read(bytes, 0);
             var h = PackageHeader.Decode(bytes, file.Length);

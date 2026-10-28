@@ -10,7 +10,7 @@ internal static class PackageExtractor
     internal static int DefaultJobs => Math.Min(Environment.ProcessorCount, 8);
 
     internal static async Task<(long Assets, long MetadataFiles)> ExtractAsync(string sourceDirectory, string destinationDirectory,
-        ReadOptions options, CancellationToken token, int? jobs = null)
+        ReadOptions options, CancellationToken token, int? jobs = null, IOperationProgress? progress = null)
     {
         token.ThrowIfCancellationRequested();
         int concurrency = jobs ?? DefaultJobs;
@@ -21,8 +21,23 @@ internal static class PackageExtractor
             throw new ArgumentException("Source and destination directories must not overlap.");
         RejectLinks(source); RejectLinks(destination);
         RequireEmpty(destination);
+        progress ??= options.Progress;
+        if (progress is not null) options = options with { Progress = progress };
         using var packages = await PackageSet.OpenDirectoryAsync(source, options, token).ConfigureAwait(false);
         if (packages.Packages.Count == 0) throw new InvalidDataException($"No .asset packages found in '{source}'.");
+        if (progress is not null)
+        {
+            progress.StartStage("Preparing extraction");
+            long totalBytes = 0, totalFiles = 0;
+            foreach (var asset in packages.Enumerate())
+            {
+                token.ThrowIfCancellationRequested();
+                totalBytes = checked(totalBytes + asset.Length);
+                totalFiles = checked(totalFiles + 1 + (asset.HasMetadata ? 1 : 0));
+            }
+            // Content bytes drive the bar; sidecars also contribute to file completion and I/O.
+            progress.StartStage("Extracting", totalBytes, totalFiles);
+        }
         string parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);
         string staging = Path.Combine(parent, ".asset-unpackage-" + Guid.NewGuid().ToString("N") + ".tmp");
@@ -35,18 +50,24 @@ internal static class PackageExtractor
                 string path = DestinationPath(staging, asset.Path);
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 await using (var file = CreateFile(path))
-                    await packages.CopyToVerifiedAsync(asset.Path, file, ct).ConfigureAwait(false);
+                    await packages.CopyToVerifiedAsync(asset.Path, file, ct, progress).ConfigureAwait(false);
+                progress?.Advance(files: 1);
                 if (asset.HasMetadata)
                 {
                     var metadata = await packages.ReadMetadataAsync(asset.Path, ct).ConfigureAwait(false);
-                    await using var file = CreateFile(DestinationPath(staging, asset.Path + ".meta"));
-                    await using var writer = new StreamWriter(file, AssetPath.Utf8);
-                    await writer.WriteAsync(PropertyMetadata.Format(metadata).AsMemory(), ct).ConfigureAwait(false);
+                    await using (var file = CreateFile(DestinationPath(staging, asset.Path + ".meta")))
+                    {
+                        await using (var writer = new StreamWriter(file, AssetPath.Utf8, leaveOpen: true))
+                            await writer.WriteAsync(PropertyMetadata.Format(metadata).AsMemory(), ct).ConfigureAwait(false);
+                        progress?.AddWritten(file.Position);
+                    }
                     Interlocked.Increment(ref metadataFiles);
+                    progress?.Advance(files: 1);
                 }
                 Interlocked.Increment(ref assets);
             }).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
+            progress?.StartStage("Publishing extraction");
             RejectLinks(destination);
             RequireEmpty(destination);
             if (Directory.Exists(destination)) Directory.Delete(destination);

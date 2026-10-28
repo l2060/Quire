@@ -31,6 +31,7 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
     private static async ValueTask<PackageSet> OpenCoreAsync(string directory, ReadOptions options, bool asynchronous, CancellationToken token)
     {
         options.Validate();
+        options.Progress?.StartStage("Opening packages");
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("Asset packages currently support little-endian .NET platforms.");
         string root = Path.GetFullPath(directory);
         if (!System.IO.Directory.Exists(root)) throw new DirectoryNotFoundException(root);
@@ -168,7 +169,7 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
     }
     public async Task CopyToAsync(string path, Stream destination, CancellationToken cancellationToken = default)
     { using var stream = OpenRead(path); await stream.CopyToAsync(destination, cancellationToken).ConfigureAwait(false); }
-    internal async Task CopyToVerifiedAsync(string path, Stream destination, CancellationToken token)
+    internal async Task CopyToVerifiedAsync(string path, Stream destination, CancellationToken token, IOperationProgress? progress = null)
     {
         using var lease = Acquire(); AssetPath.Validate(path); token.ThrowIfCancellationRequested();
         var resolved = Require(path);
@@ -183,6 +184,8 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
                 if (read == 0) break;
                 hash.AppendData(buffer, 0, read);
                 await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                progress?.AddWritten(read);
+                progress?.Advance(read);
             }
             if (!resolved.Content.ContentHash.Matches(hash.GetHashAndReset()))
                 throw new InvalidDataException($"Asset checksum mismatch: {path}");
@@ -222,12 +225,28 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
         using var lease = Acquire(); byte[] buffer = ArrayPool<byte>.Shared.Rent(65536);
         try
         {
+            var progress = _options.Progress;
+            if (progress is not null)
+            {
+                progress.StartStage("Preparing verification");
+                long totalBytes = 0, totalFiles = 0;
+                foreach (var package in _packages)
+                    for (long i = 0; i < package.Header.EntryCount; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var entry = package.ReadEntry(i);
+                        totalBytes = checked(totalBytes + entry.Length + entry.MetadataLength);
+                        totalFiles = checked(totalFiles + 1);
+                    }
+                progress.StartStage("Verifying", totalBytes, totalFiles);
+            }
             foreach (var package in _packages)
                 for (long i = 0; i < package.Header.EntryCount; i++)
                 {
                     token.ThrowIfCancellationRequested(); var entry = package.ReadEntry(i);
                     _ = await package.ReadMetadataAsync(entry, asynchronous, token).ConfigureAwait(false);
-                    if (entry.MetadataOnly) continue;
+                    progress?.Advance(entry.MetadataLength);
+                    if (entry.MetadataOnly) { progress?.Advance(files: 1); continue; }
                     using var stream = new AssetReadStream(package, entry, new NoopLease());
                     using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                     while (true)
@@ -235,9 +254,11 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
                         token.ThrowIfCancellationRequested();
                         int n = asynchronous ? await stream.ReadAsync(buffer, token).ConfigureAwait(false) : stream.Read(buffer);
                         if (n == 0) break; hash.AppendData(buffer.AsSpan(0, n));
+                        progress?.Advance(n);
                     }
                     if (!entry.ContentHash.Matches(hash.GetHashAndReset()))
                         throw new InvalidDataException($"Asset checksum mismatch: {package.ReadPath(i)}");
+                    progress?.Advance(files: 1);
                 }
         }
         finally { ArrayPool<byte>.Shared.Return(buffer, true); }

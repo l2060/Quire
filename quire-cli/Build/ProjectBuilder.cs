@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Quire.Cli.Configuration;
+using Quire.Cli.Progress;
 using Quire.Cli.Sources;
 using Quire.Cli.Tags;
 using Quire.Package;
@@ -12,14 +13,14 @@ internal sealed record BuildPlan(BuildEntry[] Changes, FileState[] Files, int Mi
 internal static class ProjectBuilder
 {
     private const string EncodingPrefix = "PK.QUIRE:1:";
-    internal static async Task<BuildPlan> PlanAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token)
+    internal static async Task<BuildPlan> PlanAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
     {
         if (project.Encrypted ? string.IsNullOrEmpty(password) : password is not null)
             throw new ArgumentException("A nonempty password is required exactly when project encryption is enabled.");
         var baseline = baseTag is { } id ? TagStore.LoadFiles(project.StateDirectory, id) : new Dictionary<(string Package, string Path), FileState>();
         if (baseline.Values.Any(f => !f.Encoding.StartsWith(EncodingPrefix, StringComparison.Ordinal)))
             throw new InvalidDataException("The base Tag uses an incompatible package format. Create a full package without -base-tag.");
-        var sources = await SourceScanner.ScanAsync(project, options.IoConcurrency, token).ConfigureAwait(false);
+        var sources = await SourceScanner.ScanAsync(project, options.IoConcurrency, token, progress).ConfigureAwait(false);
         var changes = new List<BuildEntry>(); var present = new HashSet<(string, string)>();
         // Fingerprints stay in the local .asset directory; no credentials are serialized.
         string keyFingerprint = KeyFingerprint(project.StateDirectory, password);
@@ -55,14 +56,14 @@ internal static class ProjectBuilder
         finally { CryptographicOperations.ZeroMemory(derived); }
     }
 
-    internal static Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, CancellationToken token) =>
-        BuildAsync(project, baseTag, options, project.Password, token);
+    internal static Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, CancellationToken token, IOperationProgress? progress = null) =>
+        BuildAsync(project, baseTag, options, project.Password, token, progress);
 
-    internal static async Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token)
+    internal static async Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
     {
         options.Validate(); Directory.CreateDirectory(project.StateDirectory);
         using var buildLock = new FileStream(Path.Combine(project.StateDirectory, "build.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var plan = await PlanAsync(project, baseTag, options, password, token).ConfigureAwait(false);
+        var plan = await PlanAsync(project, baseTag, options, password, token, progress).ConfigureAwait(false);
         Guid tagId = Guid.NewGuid();
         long previous = TagStore.List(project.StateDirectory).Select(t => t.BuildTimeUtc.UtcTicks).DefaultIfEmpty(0).Max();
         long ticks = Math.Max(DateTime.UtcNow.Ticks, checked(previous + 1));
@@ -75,21 +76,26 @@ internal static class ProjectBuilder
         bool outputPublished = false;
         try
         {
+            progress?.StartStage("Writing", plan.Changes.Sum(e => checked((e.MetadataOnly ? 0 : e.Source.Length) + (e.Source.Metadata?.LongLength ?? 0))), plan.Changes.LongLength);
             var outputs = new List<string>();
             foreach (var group in plan.Changes.GroupBy(e => e.Source.Package).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
                 string filename = group.Key + ".asset";
                 await PackageWriter.WriteAsync(Path.Combine(stage, filename), Path.Combine(scratch, group.Key), tagId, ticks,
-                    group.OrderBy(e => e.Source.Path, AssetPath.Comparer).ToArray(), password, options, token).ConfigureAwait(false);
+                    group.OrderBy(e => e.Source.Path, AssetPath.Comparer).ToArray(), password, options, token, progress).ConfigureAwait(false);
                 outputs.Add(Path.GetRelativePath(project.Root, Path.Combine(final, filename)).Replace('\\', '/'));
             }
             // Verify the actual staged artifacts, including metadata-only records and content digests.
-            using (var packages = await PackageSet.OpenDirectoryAsync(stage, new ReadOptions { Password = password }, token).ConfigureAwait(false))
+            using (var packages = await PackageSet.OpenDirectoryAsync(stage, new ReadOptions { Password = password, Progress = progress }, token).ConfigureAwait(false))
                 await packages.VerifyAsync(token).ConfigureAwait(false);
+            progress?.StartStage("Publishing");
             string configHash;
             await using (var configFile = File.OpenRead(project.FilePath))
-                configHash = Convert.ToHexString(await SHA256.HashDataAsync(configFile, token).ConfigureAwait(false));
+            {
+                using var tracked = progress is null ? null : new ProgressReadStream(configFile, progress);
+                configHash = Convert.ToHexString(await SHA256.HashDataAsync((Stream?)tracked ?? configFile, token).ConfigureAwait(false));
+            }
             var tag = new BuildTag(tagId, new DateTimeOffset(ticks, TimeSpan.Zero), baseTag, configHash, outputs.ToArray(),
                 plan.Changes.Count(e => !e.MetadataOnly), plan.Changes.Count(e => e.MetadataOnly));
             TagStore.Write(tagStage, tag, plan.Files);
@@ -101,7 +107,11 @@ internal static class ProjectBuilder
         catch
         {
             // Complete but unrecorded output is retained if publishing the Tag fails.
-            if (outputPublished) Console.Error.WriteLine($"Completed output retained at {final}; Tag publication did not finish.");
+            if (outputPublished)
+            {
+                if (progress is ConsoleProgress console) console.Fail();
+                Console.Error.WriteLine($"Completed output retained at {final}; Tag publication did not finish.");
+            }
             throw;
         }
         finally

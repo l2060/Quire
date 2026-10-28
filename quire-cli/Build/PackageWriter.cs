@@ -20,7 +20,7 @@ internal static class PackageWriter
     private sealed record BlockJob(BuildEntry Entry, byte[] Bytes, int Length, long Sequence);
 
     internal static async Task WriteAsync(string destination, string scratch, Guid tag, long buildTicks,
-        BuildEntry[] entries, string? password, BuildOptions options, CancellationToken token)
+        BuildEntry[] entries, string? password, BuildOptions options, CancellationToken token, IOperationProgress? progress = null)
     {
         Directory.CreateDirectory(scratch);
         bool encrypted = password is not null;
@@ -58,7 +58,11 @@ internal static class PackageWriter
                 async ValueTask WriteAt(ReadOnlyMemory<byte> bytes, long position)
                 {
                     await writeGate.WaitAsync(ct).ConfigureAwait(false);
-                    try { await RandomAccess.WriteAsync(output.SafeFileHandle, bytes, position, ct).ConfigureAwait(false); }
+                    try
+                    {
+                        await RandomAccess.WriteAsync(output.SafeFileHandle, bytes, position, ct).ConfigureAwait(false);
+                        progress?.AddWritten(bytes.Length);
+                    }
                     finally { writeGate.Release(); }
                 }
                 long Reserve(long size)
@@ -93,6 +97,8 @@ internal static class PackageWriter
                                 await WriteAt(payload, position).ConfigureAwait(false);
                                 var block = new BlockRecord(position, payload.Length, job.Length, job.Sequence, codec);
                                 await RandomAccess.WriteAsync(blockTable.SafeFileHandle, block.Encode(), checked(job.Sequence * 32), ct).ConfigureAwait(false);
+                                progress?.AddWritten(PackageHeader.BlockEntrySize);
+                                progress?.Advance(job.Length);
                                 Interlocked.Add(ref job.Entry.StoredLength, payload.Length);
                             }
                             finally { ArrayPool<byte>.Shared.Return(job.Bytes, encrypted); }
@@ -121,10 +127,15 @@ internal static class PackageWriter
                                 try
                                 {
                                     await source.ReadExactlyAsync(bytes.AsMemory(0, count), entryToken).ConfigureAwait(false);
+                                    progress?.AddRead(count);
                                     hash.AppendData(bytes.AsSpan(0, count));
                                     if (e.Blocked)
                                     { await channel.Writer.WriteAsync(new(e, bytes, count, e.FirstBlock + block), entryToken).ConfigureAwait(false); bytes = null; }
-                                    else await WriteAt(bytes.AsMemory(0, count), checked(e.DataOffset + position)).ConfigureAwait(false);
+                                    else
+                                    {
+                                        await WriteAt(bytes.AsMemory(0, count), checked(e.DataOffset + position)).ConfigureAwait(false);
+                                        progress?.Advance(count);
+                                    }
                                 }
                                 finally { if (bytes is not null) ArrayPool<byte>.Shared.Return(bytes, encrypted); }
                                 position += count; block++;
@@ -159,20 +170,32 @@ internal static class PackageWriter
                             e.MetadataOffset, e.Source.Metadata?.Length ?? 0, e.FirstBlock, e.BlockCount,
                             e.MetadataOnly ? new byte[32] : e.Source.ContentHash);
                         await index.WriteAsync(record.Encode(), token).ConfigureAwait(false); nameOffset += record.PathLength;
-                        if (e.Source.Metadata is { } bytes) await meta.WriteAsync(bytes, token).ConfigureAwait(false);
+                        progress?.AddWritten(PackageHeader.EntrySize);
+                        if (e.Source.Metadata is { } bytes)
+                        {
+                            await meta.WriteAsync(bytes, token).ConfigureAwait(false);
+                            progress?.AddWritten(bytes.Length);
+                        }
                     }
-                    foreach (var e in entries) await index.WriteAsync(AssetPath.Utf8.GetBytes(e.Source.Path), token).ConfigureAwait(false);
+                    foreach (var e in entries)
+                    {
+                        byte[] path = AssetPath.Utf8.GetBytes(e.Source.Path);
+                        await index.WriteAsync(path, token).ConfigureAwait(false);
+                        progress?.AddWritten(path.Length);
+                    }
                     await index.FlushAsync(token).ConfigureAwait(false); await meta.FlushAsync(token).ConfigureAwait(false);
-                    await ProtectSectionAsync(index, output, header.DirectoryOffset, header, key, 1, token).ConfigureAwait(false);
-                    await ProtectSectionAsync(meta, output, header.MetadataOffset, header, key, 2, token).ConfigureAwait(false);
+                    await ProtectSectionAsync(index, output, header.DirectoryOffset, header, key, 1, token, progress).ConfigureAwait(false);
+                    await ProtectSectionAsync(meta, output, header.MetadataOffset, header, key, 2, token, progress).ConfigureAwait(false);
                 }
                 await blockTable.FlushAsync(token).ConfigureAwait(false);
-                await ProtectSectionAsync(blockTable, output, header.BlocksOffset, header, key, 3, token).ConfigureAwait(false);
+                await ProtectSectionAsync(blockTable, output, header.BlocksOffset, header, key, 3, token, progress).ConfigureAwait(false);
                 await RandomAccess.WriteAsync(output.SafeFileHandle, header.Encode(key), 0, token).ConfigureAwait(false);
+                progress?.AddWritten(PackageHeader.Size);
                 output.Flush(true);
             }
             token.ThrowIfCancellationRequested();
             File.Move(temporary, destination);
+            progress?.Advance(files: entries.LongLength);
         }
         finally
         {
@@ -181,7 +204,7 @@ internal static class PackageWriter
         }
     }
     private static async Task ProtectSectionAsync(FileStream source, FileStream destination, long offset, PackageHeader header,
-        byte[] key, int domain, CancellationToken token)
+        byte[] key, int domain, CancellationToken token, IOperationProgress? progress)
     {
         source.Position = 0;
         byte[] raw = ArrayPool<byte>.Shared.Rent(PackageHeader.PageSize), encoded = ArrayPool<byte>.Shared.Rent(PackageHeader.PageSize + 16);
@@ -193,8 +216,11 @@ internal static class PackageWriter
             {
                 int size = (int)Math.Min(PackageHeader.PageSize, source.Length - source.Position);
                 await source.ReadExactlyAsync(raw.AsMemory(0, size), token).ConfigureAwait(false);
+                progress?.AddRead(size);
                 cipher.Encrypt(page, raw.AsSpan(0, size), encoded.AsSpan(0, size + 16), size);
                 await RandomAccess.WriteAsync(destination.SafeFileHandle, encoded.AsMemory(0, size + 16), offset, token).ConfigureAwait(false);
+                progress?.AddWritten(size + 16);
+                if (domain == 2) progress?.Advance(size);
                 offset += size + 16; page++;
             }
         }

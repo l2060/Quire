@@ -1,6 +1,7 @@
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
 using Quire.Cli.Extraction;
+using Quire.Cli.Progress;
 using Quire.Cli.Tags;
 using Quire.Package;
 
@@ -29,6 +30,7 @@ internal static class CommandLine
                 Meta is property=value only. Deleted source files never produce deletion records.
                 unpackage restores the merged assets and .meta files into a new or empty directory.
                 unpackage -jobs defaults to min(processor count, 8); valid range is 1..256.
+                package, unpackage and verify show progress, I/O rates and stage ETA on stderr.
                 Password options override the project's key-environment; encryption.enabled still applies.
                 """);
             return 0;
@@ -81,15 +83,30 @@ internal static class CommandLine
                 : "Specify exactly one package directory.");
             if (args[0] == "unpackage")
             {
-                var result = await PackageExtractor.ExtractAsync(positional[0], positional[1], new ReadOptions { Password = suppliedPassword }, token,
-                    Number("-jobs", PackageExtractor.DefaultJobs)).ConfigureAwait(false);
+                int jobs = Number("-jobs", PackageExtractor.DefaultJobs);
+                var result = await WithProgressAsync("unpackage", progress => PackageExtractor.ExtractAsync(positional[0], positional[1],
+                    new ReadOptions { Password = suppliedPassword }, token, jobs, progress)).ConfigureAwait(false);
                 Console.WriteLine($"Extracted {result.Assets} assets and {result.MetadataFiles} metadata files to {Path.GetFullPath(positional[1])}");
                 return 0;
             }
-            using var set = await PackageSet.OpenDirectoryAsync(positional[0], new ReadOptions { Password = suppliedPassword }, token).ConfigureAwait(false);
-            foreach (var p in set.Packages) Console.WriteLine($"{p.BuildTimeUtc:O}  {p.TagId:N}  {p.EntryCount} entries  encrypted={p.IsEncrypted}  {p.FilePath}");
-            if (args[0] == "verify") { await set.VerifyAsync(token).ConfigureAwait(false); Console.WriteLine("Verification passed."); }
-            else foreach (var asset in set.Enumerate()) Console.WriteLine($"{asset.Length,12}  meta={asset.HasMetadata}  {asset.Path}");
+            if (args[0] == "verify")
+            {
+                var packages = await WithProgressAsync("verify", async progress =>
+                {
+                    using var set = await PackageSet.OpenDirectoryAsync(positional[0],
+                        new ReadOptions { Password = suppliedPassword, Progress = progress }, token).ConfigureAwait(false);
+                    await set.VerifyAsync(token).ConfigureAwait(false);
+                    return set.Packages.ToArray();
+                }).ConfigureAwait(false);
+                foreach (var p in packages) PrintPackage(p);
+                Console.WriteLine("Verification passed.");
+            }
+            else
+            {
+                using var set = await PackageSet.OpenDirectoryAsync(positional[0], new ReadOptions { Password = suppliedPassword }, token).ConfigureAwait(false);
+                foreach (var p in set.Packages) PrintPackage(p);
+                foreach (var asset in set.Enumerate()) Console.WriteLine($"{asset.Length,12}  meta={asset.HasMetadata}  {asset.Path}");
+            }
             return 0;
         }
         if (positional.Count != 0) throw new ArgumentException("Unexpected positional argument.");
@@ -115,9 +132,25 @@ internal static class CommandLine
             Console.WriteLine($"{plan.Changes.Length} changes; {plan.MissingSources} inherited paths absent from source.");
             return 0;
         }
-        var built = await ProjectBuilder.BuildAsync(project, baseline, options, password, token).ConfigureAwait(false);
+        var built = await WithProgressAsync("package", progress => ProjectBuilder.BuildAsync(project, baseline, options, password, token, progress)).ConfigureAwait(false);
         Console.WriteLine($"Tag: {built.TagId:N}\nTime: {built.BuildTimeUtc:O}\nContent: {built.ContentChanges}; Meta: {built.MetadataChanges}");
         foreach (var output in built.Outputs) Console.WriteLine(output);
         return 0;
+    }
+
+    private static void PrintPackage(AssetPackageInfo package) => Console.WriteLine(
+        $"{package.BuildTimeUtc:O}  {package.TagId:N}  {package.EntryCount} entries  encrypted={package.IsEncrypted}  {package.FilePath}");
+
+    private static async Task<T> WithProgressAsync<T>(string command, Func<ConsoleProgress, Task<T>> operation)
+    {
+        using var progress = new ConsoleProgress(command);
+        try
+        {
+            T result = await operation(progress).ConfigureAwait(false);
+            progress.Complete();
+            return result;
+        }
+        catch (OperationCanceledException) { progress.Fail(canceled: true); throw; }
+        catch { progress.Fail(); throw; }
     }
 }

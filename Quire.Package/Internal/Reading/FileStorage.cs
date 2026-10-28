@@ -9,10 +9,12 @@ internal sealed class FileStorage : IDisposable
     private SafeFileHandle? _async;
     private readonly MemoryMappedFile? _mapping;
     private readonly MemoryMappedViewAccessor? _view;
+    private readonly IOperationProgress? _progress;
     internal long Length { get; }
 
-    internal FileStorage(string path, bool mapped)
+    internal FileStorage(string path, bool mapped, IOperationProgress? progress = null)
     {
+        _progress = progress;
         _file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1, FileOptions.RandomAccess);
         try
         {
@@ -37,12 +39,14 @@ internal sealed class FileStorage : IDisposable
             _view.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
             try { new ReadOnlySpan<byte>(pointer + _view.PointerOffset + offset, destination.Length).CopyTo(destination); }
             finally { _view.SafeMemoryMappedViewHandle.ReleasePointer(); }
+            _progress?.AddRead(destination.Length);
             return;
         }
         while (!destination.IsEmpty)
         {
             int n = RandomAccess.Read(_file.SafeFileHandle, destination, offset);
             if (n == 0) throw new EndOfStreamException("Asset file is truncated.");
+            _progress?.AddRead(n);
             offset += n; destination = destination[n..];
         }
     }
@@ -55,6 +59,7 @@ internal sealed class FileStorage : IDisposable
         {
             int n = await RandomAccess.ReadAsync(AsyncHandle, destination, offset, token).ConfigureAwait(false);
             if (n == 0) throw new EndOfStreamException("Asset file is truncated.");
+            _progress?.AddRead(n);
             offset += n; destination = destination[n..];
         }
     }

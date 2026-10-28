@@ -14,6 +14,7 @@ internal static class Suite
         void Test(string name, Func<Task> body) => tests.Add((name, body));
         void Sync(string name, Action body) => Test(name, () => { body(); return Task.CompletedTask; });
         CliTests.Register(Test);
+        ProgressTests.Register(Test);
         Sync("all eight metadata types and deterministic property encoding", () =>
         {
             var m = new Metadata(PropertyMetadata.Parse("name=hero\ni=-9223372036854775808\nd=1.25\nb=true\ns=[\"a\",\"中\"]\nints=[1,2]\nds=[0.5,2.0]\nbs=[true,false]\nempty:int64[]=[]\ncode:string=001\nurl=a=b#c"));

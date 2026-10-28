@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Quire.Cli.Configuration;
+using Quire.Cli.Progress;
 using Quire.Package.Internal;
 
 namespace Quire.Cli.Sources;
@@ -13,8 +14,9 @@ internal static class SourceScanner
     private sealed record Candidate(PackageConfig Package, string Path, string FullPath, string? MetadataPath);
     private sealed record ScanDirectory(PackageConfig Package, SourceConfig Source, string Directory, IReadOnlyList<IgnoreRule> Rules, Glob[] Includes, Glob[] Excludes);
 
-    internal static async Task<SourceAsset[]> ScanAsync(ProjectConfig project, int concurrency, CancellationToken token)
+    internal static async Task<SourceAsset[]> ScanAsync(ProjectConfig project, int concurrency, CancellationToken token, IOperationProgress? progress = null)
     {
+        progress?.StartStage("Discovering");
         var candidates = new ConcurrentBag<Candidate>();
         var roots = project.Packages.SelectMany(p => p.Sources.Select(s => new ScanDirectory(p, s, s.Directory,
             IgnoreRule.Load(Path.Combine(project.Root, ".assetignore"), s.Directory), s.Include.Select(x => new Glob(x)).ToArray(), s.Exclude.Select(x => new Glob(x)).ToArray()))).ToArray();
@@ -71,21 +73,41 @@ internal static class SourceScanner
         for (int i = 1; i < inputs.Length; i++)
             if (inputs[i - 1].Package.Name == inputs[i].Package.Name && inputs[i - 1].Path == inputs[i].Path)
                 throw new InvalidDataException($"Duplicate path '{inputs[i].Path}' in package '{inputs[i].Package.Name}'.");
+        if (progress is not null)
+        {
+            long totalBytes = 0;
+            foreach (var input in inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                totalBytes = checked(totalBytes + new FileInfo(input.FullPath).Length);
+                if (input.MetadataPath is { } metadataPath) totalBytes = checked(totalBytes + new FileInfo(metadataPath).Length);
+            }
+            progress.StartStage("Hashing", totalBytes, inputs.LongLength);
+        }
         var output = new SourceAsset[inputs.Length];
         await Parallel.ForEachAsync(Enumerable.Range(0, inputs.Length), new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = token }, async (i, ct) =>
         {
             var input = inputs[i]; var before = new FileInfo(input.FullPath); long length = before.Length; DateTime stamp = before.LastWriteTimeUtc;
             await using var file = new FileStream(input.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            byte[] hash = await SHA256.HashDataAsync(file, ct).ConfigureAwait(false);
+            using var tracked = progress is null ? null : new ProgressReadStream(file, progress, advance: true);
+            byte[] hash = await SHA256.HashDataAsync((Stream?)tracked ?? file, ct).ConfigureAwait(false);
             before.Refresh();
             if (before.Length != length || before.LastWriteTimeUtc != stamp || file.Length != length) throw new IOException($"Source changed while scanning: {input.FullPath}");
             byte[]? meta = null;
             if (input.MetadataPath is { } metadataPath)
             {
                 if (new FileInfo(metadataPath).Length > PackageHeader.MaxMetadataBytes) throw new InvalidDataException($"Metadata exceeds 1 MiB: {metadataPath}");
-                meta = PropertyMetadata.Parse(await File.ReadAllTextAsync(metadataPath, AssetPath.Utf8, ct).ConfigureAwait(false), metadataPath);
+                if (progress is null)
+                    meta = PropertyMetadata.Parse(await File.ReadAllTextAsync(metadataPath, AssetPath.Utf8, ct).ConfigureAwait(false), metadataPath);
+                else
+                {
+                    await using var metadataFile = new FileStream(metadataPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    using var reader = new StreamReader(new ProgressReadStream(metadataFile, progress, advance: true), AssetPath.Utf8);
+                    meta = PropertyMetadata.Parse(await reader.ReadToEndAsync(ct).ConfigureAwait(false), metadataPath);
+                }
             }
             output[i] = new(input.Package.Name, input.Path, input.FullPath, length, hash, meta, meta is null ? null : SHA256.HashData(meta), input.Package.Compression);
+            progress?.Advance(files: 1);
         }).ConfigureAwait(false);
         return output;
     }
