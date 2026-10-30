@@ -1,6 +1,6 @@
 namespace Quire.Package.Internal;
 /// <summary>Exclusive leases of GCM contexts, grouped by derived key. Never shares an active context.</summary>
-internal sealed class CipherPool(byte[] key, Guid tag, int domain = 4) : IDisposable
+internal sealed class CipherPool(byte[] key, string tag, int domain = 4) : IDisposable
 {
     private readonly object _sync = new();
     private readonly BlockCipher?[] _items = new BlockCipher[32];

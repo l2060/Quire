@@ -19,7 +19,7 @@ internal static class PackageWriter
 {
     private sealed record BlockJob(BuildEntry Entry, byte[] Bytes, int Length, long Sequence);
 
-    internal static async Task WriteAsync(string destination, string scratch, Guid tag, long buildTicks,
+    internal static async Task WriteAsync(string destination, string scratch, string tag, long buildTicks,
         BuildEntry[] entries, string? password, BuildOptions options, CancellationToken token, IOperationProgress? progress = null)
     {
         Directory.CreateDirectory(scratch);

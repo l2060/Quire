@@ -4,8 +4,9 @@ using System.Text;
 
 namespace Quire.Package.Internal;
 
-internal sealed class BlockCipher(byte[] master, Guid tag, int domain) : IDisposable
+internal sealed class BlockCipher(byte[] master, string tag, int domain) : IDisposable
 {
+    private readonly uint _tag = PackageTag.Parse(tag);
     private long _group = -1;
     private AesGcm? _aes;
     private byte[]? _key;
@@ -39,7 +40,7 @@ internal sealed class BlockCipher(byte[] master, Guid tag, int domain) : IDispos
         }
         nonce.Clear(); BinaryPrimitives.WriteInt32LittleEndian(nonce, domain);
         BinaryPrimitives.WriteInt64LittleEndian(nonce[4..], sequence);
-        aad.Clear(); tag.TryWriteBytes(aad);
+        aad.Clear(); BinaryPrimitives.WriteUInt32LittleEndian(aad, _tag);
         BinaryPrimitives.WriteInt32LittleEndian(aad[16..], domain);
         BinaryPrimitives.WriteInt64LittleEndian(aad[20..], sequence);
         BinaryPrimitives.WriteInt32LittleEndian(aad[28..], length); aad[32] = codec;

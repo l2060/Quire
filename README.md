@@ -20,7 +20,7 @@ Quire.Package 是面向应用程序的资源打包与读取工具。它将多个
 - Meta 支持 string、int64、double、bool 及对应数组，读取时使用明确类型的 API。
 - 按目录加载基础包和补丁，支持并发读取、并发解包，以及可选内存映射读取。
 
-资源包后缀为 `.asset`，头部 magic 为 8 字节 ASCII `PK.QUIRE`。这是全新格式及 API，不兼容原 `GameResource.Package` 和中间版本 `GASSET01` 文件；升级时需要完整重打，不能基于旧格式 Tag 生成增量。资源包不提供写入、删除、移动、保存或空间回收 API。
+资源包后缀为 `.asset`，头部 magic 为 8 字节 ASCII `PK.QUIRE`，当前文件格式版本为 2，TagID 为 8 位小写十六进制字符串。旧格式包和旧 GUID 构建记录均视为解析失败，不提供兼容或自动转换。资源包不提供写入、删除、移动、保存或空间回收 API。
 
 阅读入口：[安装 CLI](#安装-quire-cli) · [安装类库](#安装-quirepackage) · [快速上手](#快速上手) · [CLI 命令](#cli-命令和参数) · [C# API](#quirepackage-使用指南) · [源码构建与发布](#从源码构建和发布)
 
@@ -219,7 +219,7 @@ quire-cli verify ./MyAssets/dist
 quire-cli unpackage ./MyAssets/dist ./Unpacked -jobs 5
 ```
 
-`package` 输出本次 TagID 和资源包路径。文件位于 `MyAssets/dist/<TagID>/common.asset`，构建记录位于 `MyAssets/.asset/`。解包后可以在 `Unpacked/common/data/settings.txt` 及其 `.meta` 中看到还原结果；解包目标需要不存在或为空。
+`package` 输出本次 TagID 和资源包路径。文件位于 `MyAssets/dist/<TagID>/common.asset`，构建记录位于 `MyAssets/.quire/`。解包后可以在 `Unpacked/common/data/settings.txt` 及其 `.meta` 中看到还原结果；解包目标需要不存在或为空。
 
 ### 4. 在 C# 程序中读取
 
@@ -267,18 +267,18 @@ dotnet run --project ./QuireReader/QuireReader.csproj -- ./MyAssets/dist
 | --- | --- | --- |
 | `init` | 初始化完整的多包配置和源目录 | `quire-cli init ./MyAssets` |
 | `package` | 构建资源包，不带基准 Tag 时为全量构建 | `quire-cli package -project ./MyAssets/quire.project.yml -jobs 5` |
-| `diff` | 与指定 Tag 比较，列出本次需打包的内容或 Meta | `quire-cli diff -project ./MyAssets/quire.project.yml -base-tag TAG_ID` |
+| `diff` | 与指定 Tag 比较，列出本次需打包的内容或 Meta | `quire-cli diff -project ./MyAssets/quire.project.yml -base TAG_ID` |
 | `tags` | 查看该项目的本地构建记录 | `quire-cli tags -project ./MyAssets/quire.project.yml` |
 | `inspect` | 查看目录中的物理包和最终有效资源路径 | `quire-cli inspect ./MyAssets/dist` |
 | `verify` | 校验目录中的所有包，包括被后续包覆盖的内容 | `quire-cli verify ./MyAssets/dist` |
 | `unpackage` | 并发解包最终有效资源及 Meta | `quire-cli unpackage ./MyAssets/dist ./Unpacked -jobs 5` |
 
-示例中的 `TAG_ID` 需要替换为 `package` 或 `tags` 输出的实际 TagID。
+示例中的 `TAG_ID` 需要替换为 `package` 或 `tags` 输出的 8 位 TagID，也可以使用能够唯一匹配该项目构建记录的十六进制前缀（不区分大小写）。
 
 | 参数 | 适用命令 | 默认值或要求 |
 | --- | --- | --- |
 | `-project PATH` | `package`、`diff`、`tags` | 可选，默认当前工作目录中的 `quire.project.yml` |
-| `-base-tag TAG` | `package`、`diff` | `package` 可选；`diff` 必填 |
+| `-base TAG` | `package`、`diff` | `package` 可选；`diff` 必填；接受完整 8 位 TagID 或唯一前缀，共 1–8 位十六进制字符 |
 | `-jobs N` | `package`、`diff`、`unpackage` | 可选，默认逻辑处理器数与 8 的较小值，范围 1–256；打包时还受 YAML 内存预算约束 |
 | `-pwd VALUE` | `package`、`diff`、`inspect`、`verify`、`unpackage` | 可选，直接提供非空密码；加密包需要有效密码来源 |
 | `-pwd-env NAME` | 同上 | 可选，从指定环境变量读取密码，与 `-pwd` 互斥 |
@@ -387,28 +387,36 @@ emptyIds:int64[]=[]
 draft/
 ```
 
-已排除的目录直接剪枝；重新包含子文件需要先包含其父目录。规则区分大小写。当前项目的 `.asset/`、输出目录、项目配置和规则文件不作为资源。符号链接和 junction 不参与扫描。忽略资源时其 Meta 一并忽略；单独忽略 sidecar 等价于本次源没有 Meta。未被忽略的孤立 sidecar 报错，扫描/权限错误使构建失败。
+已排除的目录直接剪枝；重新包含子文件需要先包含其父目录。规则区分大小写。当前项目的 `.quire/`、输出目录、项目配置和规则文件不作为资源。符号链接和 junction 不参与扫描。忽略资源时其 Meta 一并忽略；单独忽略 sidecar 等价于本次源没有 Meta。未被忽略的孤立 sidecar 报错，扫描/权限错误使构建失败。
 
 ## Tag 和增量构建
 
 ```powershell
 quire-cli package -project ./quire.project.yml
-quire-cli package -project ./quire.project.yml -base-tag TAG_ID
+quire-cli package -project ./quire.project.yml -base TAG_ID
 quire-cli package -project ./quire.project.yml -pwd "your-password"
-quire-cli diff -project ./quire.project.yml -base-tag TAG_ID
+quire-cli diff -project ./quire.project.yml -base TAG_ID
 quire-cli tags -project ./quire.project.yml
 quire-cli inspect ./dist
 quire-cli verify ./dist -pwd "your-password"
 ```
 
-每次成功构建生成 GUID TagId。指定 `-base-tag` 时，以该 Tag 的有效资源清单比较内容 SHA-256、规范化 Meta 摘要、分包位置和编码策略。删除源文件不生成删除记录；仅删除 sidecar 不移除旧 Meta。完整内容替换同时替换该资源的 Meta 状态。Meta-only 记录替换整份 Meta，不合并字段。编码策略或加密凭据变化会重新写入相关内容。
+每次成功构建生成长度固定为 8 的小写十六进制 TagID，例如 `72745fcb`。TagID 使用随机 32 位值；每次打包都会持有项目构建锁和输出目录锁，与全部已有 Tag 比较，并保留已存在的输出目录和暂存目录名称，发生碰撞就重新生成，避免覆盖已有构建。此唯一性检查以当前项目的本地构建记录和输出目录为范围；共享输出目录的项目也不能同时分配 Tag 和发布产物。
+
+指定 `-base` 时，以该 Tag 的有效资源清单比较内容 SHA-256、规范化 Meta 摘要、分包位置和编码策略。删除源文件不生成删除记录；仅删除 sidecar 不移除旧 Meta。完整内容替换同时替换该资源的 Meta 状态。Meta-only 记录替换整份 Meta，不合并字段。编码策略或加密凭据变化会重新写入相关内容。
+
+`-base` 支持完整 8 位 TagID 或至少一位的唯一十六进制前缀，不区分大小写。例如已有 Tag 为 `72745fcb`、`cb7d4e65`、`7fcb7655` 时，可使用 `package -base 72`、`package -base c`、`package -base 7f`；`diff` 同样支持。`-base 7` 匹配多条记录时会报错并提示补充字符；不存在的前缀也会报错。
+
+`tags` 按构建时间升序输出预留列宽、左对齐的表格，`TAG` 和 `BASE` 均显示完整的 8 位 ID。`BUILD TIME` 为本地时区的构建时间，格式为 `yyyy-MM-dd HH:mm:ss`；`OUTPUT FILES` 为本次生成的 `.asset` 文件数，`CONTENT` 为写入完整内容的资源数，`META ONLY` 为仅更新 Meta 的资源数，`BASE` 为基准 TagID，全量构建显示 `NULL`。无构建记录时仍显示表头。
+
+`.quire/tags/` 中的构建记录必须使用 8 位 TagID；旧 GUID 目录或记录会导致解析失败，不会被忽略或迁移。项目 YAML 的 `version: 1` 是配置格式版本，与资源包格式版本 2 无关。
 
 增量是文件级的；大文件内容变化会重新写入整个文件。扫描默认重新计算内容摘要，不仅依赖时间戳。实际打包再次计算摘要，源内容变化时失败。发布构建应使用稳定的源目录；各文件的读取检查不等同于文件系统原子快照。
 
-构建状态固定在配置文件旁的 `.asset/`：
+构建状态固定在配置文件旁的 `.quire/`：
 
 ```text
-.asset/
+.quire/
   tags/<TagId>/tag.json       构建记录
   tags/<TagId>/files.idx      完整有效清单
   temp/                      临时索引
@@ -465,7 +473,9 @@ if (!assets.TryGetFileInfo(path, out AssetInfo info))
 
 同步打开使用 `PackageSet.Open(directory, options)`。集合应通过 `using` 或 `await using` 释放。打开目录会读取包头和必要索引，不会一次加载全部资源内容。
 
-默认递归扫描 `.asset` 文件；跳过 `.asset` 状态目录、以 `.tmp` 结尾的暂存目录和符号链接。`ReadOptions.Recursive=false` 可限制为当前目录。不可读的包、缺少密码或打开阶段发现的格式损坏会使打开失败，并报告具体文件；完整数据检查使用 `VerifyAsync`。
+`AssetPackageInfo.TagId` 的类型为 `string`，返回完整的 8 位小写十六进制 ID。
+
+默认递归扫描 `.asset` 文件；跳过 `.quire` 状态目录、以 `.tmp` 结尾的暂存目录和符号链接。`ReadOptions.Recursive=false` 可限制为当前目录。不可读的包、缺少密码或打开阶段发现的格式损坏会使打开失败，并报告具体文件；完整数据检查使用 `VerifyAsync`。
 
 `EnumerateFiles()` 枚举所有有效文件；`EnumerateFiles("common/data", false)` 仅枚举该虚拟目录的直接子文件。`FileExists(path)` 仅判断是否存在，`GetFileInfo(path)` 在不存在时抛出 `FileNotFoundException`，`TryGetFileInfo` 则返回 `false`。查询只访问必要索引，不读取资源内容。
 

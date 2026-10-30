@@ -1,15 +1,16 @@
-# Quire.Package 格式 1
+# Quire.Package 格式 2
 
-所有整数为小端；偏移、总长度、块数量、记录数量采用非负 Int64。禁止直接序列化托管结构体。Magic 为 8 字节 ASCII `PK.QUIRE`，资源文件扩展名为 `.asset`，不读取旧 `GRPKG002` 或 `GASSET01` 文件。
+所有整数为小端；偏移、总长度、块数量、记录数量采用非负 Int64。禁止直接序列化托管结构体。Magic 为 8 字节 ASCII `PK.QUIRE`，资源文件扩展名为 `.asset`。TagID 为 UInt32，对外以固定 8 位小写十六进制字符串表示。只接受当前格式 2；使用 GUID TagID 的格式 1、旧 `GRPKG002` 和 `GASSET01` 文件均视为解析失败，不提供兼容或转换处理。
 
 ## 文件头（4096 字节）
 
 | 偏移 | 长度 | 字段 |
 |---:|---:|---|
 | 0 | 8 | PK.QUIRE |
-| 8 | 4 | 版本 1 |
+| 8 | 4 | 版本 2 |
 | 12 | 4 | Flags，0=内容公开，1=内容加密 |
-| 16 | 16 | TagId，Guid.TryWriteBytes 的标准 .NET 字节布局 |
+| 16 | 4 | TagId，UInt32；以 `x8` 格式显示为 8 位小写十六进制字符串 |
+| 20 | 12 | 保留，必须为 0 |
 | 32 | 8 | UTC DateTime ticks |
 | 40 | 4 | 块大小，64 KiB–1 MiB 的二次幂 |
 | 44 | 4 | PBKDF2 次数，公开模式为 0 |
@@ -83,7 +84,7 @@ Meta-only 必须有 Meta，所有内容字段及摘要为零。完整空资源�
 
 加密 masterKey：PBKDF2-SHA256(password, salt, iterations, 32)，迭代数限制100000–10000000。
 
-公开保护 masterKey：HMAC-SHA256(UTF8("Quire.Package public index protection v1"), salt)。这个密钥可公开推导，只用于隐藏明文，不提供保密性或发布者身份认证。
+公开保护 masterKey：HMAC-SHA256(UTF8("Quire.Package public index protection v1"), salt)。派生标签中的 `v1` 字面量保持不变，不表示文件格式版本。这个密钥可公开推导，只用于隐藏明文，不提供保密性或发布者身份认证。
 
 域：1=目录，2=Meta，3=块表，4=资源内容。前三个域始终使用GCM；域4仅在内容加密时使用。目录/Meta/块表的序号为区域内页号，内容的序号为全包块号。
 
@@ -91,7 +92,7 @@ Meta-only 必须有 Meta，所有内容字段及摘要为零。完整空资源�
 
 nonce为12字节：domain:Int32 + sequence:Int64。
 
-AAD为40字节：TagId:16、domain:Int32、sequence:Int64、rawLength:Int32、codec:Byte、reserved:3Bytes=0、encodedPlainLength:Int32。
+AAD为40字节：TagId:UInt32、reserved:12Bytes=0、domain:Int32、sequence:Int64、rawLength:Int32、codec:Byte、reserved:3Bytes=0、encodedPlainLength:Int32。TagId 占前 4 字节，紧跟 12 字节零填充；domain 及后续字段的偏移保持不变。
 
 每个包随机盐必须重新生成；不允许在相同主密钥和序号下重写不同明文。AAD不绑定物理偏移，允许CLI先并行编码，再分配最终位置。路径和资源描述受目录页认证保护。
 

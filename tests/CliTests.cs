@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Quire.Cli;
+using Quire.Cli.Build;
 using Quire.Cli.Configuration;
 using Quire.Cli.Extraction;
 using Quire.Cli.Sources;
@@ -80,6 +81,8 @@ internal static class CliTests
 
             Check.True(help.ToString().Contains("quire-cli package", StringComparison.Ordinal));
             Check.True(help.ToString().Contains("quire-cli unpackage", StringComparison.Ordinal));
+            Check.True(help.ToString().Contains("-base TAG", StringComparison.Ordinal));
+            Check.True(!help.ToString().Contains("-base-tag", StringComparison.Ordinal));
             Check.True(!help.ToString().Contains("quire-cli build", StringComparison.Ordinal));
             foreach (string option in new[]
             {
@@ -93,6 +96,190 @@ internal static class CliTests
             {
                 Check.True(!help.ToString().Contains(option, StringComparison.Ordinal));
                 await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync(["package", "-project", f.ProjectPath, option, "2"], default));
+            }
+        });
+        test("CLI package and diff resolve unique prefixes and eight-character Tags", async () =>
+        {
+            string[] ids = ["72745fcb", "cb7d4e65", "7fcb7655"];
+            (string Selector, string Expected)[] selections =
+            [
+                ("72", ids[0]), ("7f", ids[2]), ("c", ids[1]),
+                ("C", ids[1]), ("7F", ids[2]),
+                ("72745fcb", ids[0]), ("CB7D4E65", ids[1])
+            ];
+            foreach (var selection in selections)
+            {
+                using var f = new Fixture();
+                f.Put("a", [1, 2, 3]);
+                string state = f.Config().StateDirectory;
+                foreach (string id in ids)
+                {
+                    var tag = new BuildTag(id, DateTimeOffset.UnixEpoch, null, "unused", [], 0, 0);
+                    TagStore.Write(Path.Combine(state, "tags", id), tag, []);
+                }
+
+                string diff = await CaptureOutputAsync(["diff", "-project", f.ProjectPath, "-base=" + selection.Selector]);
+                Check.True(diff.Contains("CONTENT  main/common/data/a", StringComparison.Ordinal));
+                Check.True(diff.Contains("1 changes;", StringComparison.Ordinal));
+                Check.Equal(3, TagStore.List(state).Count());
+                Check.True(!Directory.Exists(f.Output));
+                string output = await CaptureOutputAsync(["package", "-project", f.ProjectPath, "-base", selection.Selector]);
+                var built = TagStore.List(state).Single(tag => !ids.Contains(tag.TagId));
+                Check.Equal("Tag: " + built.TagId, output.Split('\n')[0].TrimEnd('\r'));
+                Check.Equal(8, built.TagId.Length);
+                Check.True(built.TagId.All(char.IsAsciiHexDigit));
+                Check.Equal(built.TagId.ToLowerInvariant(), built.TagId);
+                Check.Equal(selection.Expected, built.BaseTag);
+                Check.Equal(1, built.ContentChanges);
+                Check.Equal(1, built.Outputs.Length);
+                Check.True(File.Exists(Path.Combine(f.Root, built.Outputs[0])));
+            }
+        });
+        test("Tag generation retries collisions against every reserved ID", () =>
+        {
+            var candidates = new Queue<uint>([0x72745fcb, 0xcb7d4e65, 0x1234abcd]);
+            string id = TagStore.CreateId(["72745FCB", "cb7d4e65"], candidates.Dequeue);
+            Check.Equal("1234abcd", id);
+            Check.Equal(0, candidates.Count);
+            Check.Equal("00000000", TagStore.CreateId([], () => 0));
+            return Task.CompletedTask;
+        });
+        test("build Tag generation reserves history, orphan outputs and staging IDs", () =>
+        {
+            using var f = new Fixture();
+            var project = f.Config();
+            var history = new BuildTag("11111111", DateTimeOffset.UnixEpoch, null, "unused", [], 0, 0);
+            string[] reserved =
+            [
+                Path.Combine(f.Output, "22222222"),
+                Path.Combine(f.Output, ".33333333.tmp"),
+                Path.Combine(project.StateDirectory, "tags", ".44444444.tmp"),
+                Path.Combine(project.StateDirectory, "tags", "55555555")
+            ];
+            foreach (string directory in reserved)
+                Directory.CreateDirectory(directory);
+            var candidates = new Queue<uint>([0x11111111, 0x22222222, 0x33333333, 0x44444444, 0x55555555, 0xabcdef12]);
+            Check.Equal("abcdef12", ProjectBuilder.CreateTagId(project, [history], candidates.Dequeue));
+            Check.Equal(0, candidates.Count);
+            Check.True(reserved.All(Directory.Exists));
+            return Task.CompletedTask;
+        });
+        test("a locked shared output rejects builds and releases the project lock", async () =>
+        {
+            using var f = new Fixture();
+            f.Put("a", [1, 2, 3]);
+            Directory.CreateDirectory(f.Output);
+            using (new FileStream(Path.Combine(f.Output, ".quire-build.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                await Check.ThrowsAsync<IOException>(() => f.Build());
+                Check.Equal(0, TagStore.List(f.Config().StateDirectory).Count());
+                Check.Equal(0, Directory.GetDirectories(f.Output).Length);
+            }
+
+            var built = await f.Build();
+            Check.Equal(1, TagStore.List(f.Config().StateDirectory).Count());
+            Check.Equal(1, built.Outputs.Length);
+            Check.True(File.Exists(Path.Combine(f.Root, built.Outputs[0])));
+        });
+        test("CLI rejects ambiguous, missing and invalid base Tags before publishing", async () =>
+        {
+            using var f = new Fixture();
+            f.Put("a", [1, 2, 3]);
+            string state = f.Config().StateDirectory;
+            string[] ids = ["72745fcb", "7fcb7655"];
+            foreach (string id in ids)
+            {
+                var tag = new BuildTag(id, DateTimeOffset.UnixEpoch, null, "unused", [], 0, 0);
+                TagStore.Write(Path.Combine(state, "tags", id), tag, []);
+            }
+
+            foreach (string command in new[] { "package", "diff" })
+            {
+                foreach (string selector in new[] { "7", "", " ", "g", "72-", "72745fcb0", "72745fcb765d4e00000000000000000001", "../72" })
+                    await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync([command, "-project", f.ProjectPath, "-base", selector], default));
+                foreach (string selector in new[] { "ab", "aaaaaaaa" })
+                    await Check.ThrowsAsync<FileNotFoundException>(() => CommandLine.RunAsync([command, "-project", f.ProjectPath, "-base", selector], default));
+                await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync([command, "-project", f.ProjectPath, "-base-tag", ids[0]], default));
+                await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync([command, "-project", f.ProjectPath, "-base"], default));
+            }
+
+            await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync(["diff", "-project", f.ProjectPath], default));
+            Check.True(TagStore.List(state).Select(tag => tag.TagId).Order().SequenceEqual(ids.Order()));
+            Check.True(!Directory.Exists(f.Output));
+        });
+        test("CLI rejects malformed Tag directories before writing a new build", async () =>
+        {
+            using var f = new Fixture();
+            f.Put("a", [1, 2, 3]);
+            string state = f.Config().StateDirectory;
+            string invalidDirectory = Path.Combine(state, "tags", "deadbeef765d4e00000000000000000001");
+            Directory.CreateDirectory(invalidDirectory);
+            string record = "{\"TagId\":\"deadbeef-765d-4e00-0000-000000000001\"}";
+            File.WriteAllText(Path.Combine(invalidDirectory, "tag.json"), record);
+            foreach (string command in new[] { "package", "diff" })
+                await Check.ThrowsAsync<InvalidDataException>(() => CommandLine.RunAsync([command, "-project", f.ProjectPath, "-base", "deadbeef"], default));
+            await Check.ThrowsAsync<InvalidDataException>(() => CommandLine.RunAsync(["package", "-project", f.ProjectPath], default));
+            Check.Equal(record, File.ReadAllText(Path.Combine(invalidDirectory, "tag.json")));
+            Check.Equal(1, Directory.GetDirectories(Path.Combine(state, "tags")).Length);
+            Check.True(!Directory.Exists(f.Output));
+        });
+        test("CLI, package headers, output directories and state use eight-character Tags", async () =>
+        {
+            using var f = new Fixture();
+            f.Put("a", [1, 2, 3]);
+            string orphan = Path.Combine(f.Output, "1234abcd");
+            Directory.CreateDirectory(orphan);
+            File.WriteAllText(Path.Combine(orphan, "keep.txt"), "orphan output");
+            string output = await CaptureOutputAsync(["package", "-project", f.ProjectPath]);
+            var built = TagStore.List(f.Config().StateDirectory).Single();
+            Check.Equal(8, built.TagId.Length);
+            Check.True(built.TagId != "1234abcd");
+            Check.Equal("orphan output", File.ReadAllText(Path.Combine(orphan, "keep.txt")));
+            Check.Equal("Tag: " + built.TagId, output.Split('\n')[0].TrimEnd('\r'));
+            string record = Path.Combine(f.Config().StateDirectory, "tags", built.TagId, "tag.json");
+            Check.True(File.ReadAllText(record).Contains("\"" + built.TagId + "\"", StringComparison.Ordinal));
+            Check.True(Directory.Exists(Path.Combine(f.Output, built.TagId)));
+            using (var packages = PackageSet.Open(f.Output))
+                Check.Equal(built.TagId, packages.Packages.Single().TagId);
+            foreach (string command in new[] { "inspect", "verify" })
+            {
+                string listing = await CaptureOutputAsync([command, f.Output]);
+                Check.Equal(built.TagId, listing.Split('\n')[0].Split("  ", StringSplitOptions.None)[1]);
+            }
+        });
+        test("CLI tags aligns columns and shows local build time, output counts and base Tags", async () =>
+        {
+            using var f = new Fixture();
+            string[] headers = ["TAG", "BUILD TIME", "OUTPUT FILES", "CONTENT", "META ONLY", "BASE"];
+            int[] starts = [0, 10, 36, 50, 62, 74];
+            string empty = await CaptureOutputAsync(["tags", "-project", f.ProjectPath]);
+            string[] emptyLines = empty.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Check.Equal(1, emptyLines.Length);
+            CheckColumns(emptyLines[0], headers);
+
+            var full = new BuildTag("72745fcb",
+                new DateTimeOffset(2026, 10, 30, 5, 22, 46, 666, TimeSpan.Zero), null, "unused", ["a.asset", "b.asset", "c.asset"], 2, 0);
+            var patch = new BuildTag("cb7d4e65",
+                full.BuildTimeUtc.AddHours(1).AddMilliseconds(1), full.TagId, "unused", [], 0, 12);
+            string state = f.Config().StateDirectory;
+            foreach (var tag in new[] { patch, full })
+                TagStore.Write(Path.Combine(state, "tags", tag.TagId), tag, []);
+
+            string output = await CaptureOutputAsync(["tags", "-project", f.ProjectPath]);
+            string[] lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Check.Equal(3, lines.Length);
+            Check.Equal(emptyLines[0], lines[0]);
+            CheckColumns(lines[1], ["72745fcb", full.BuildTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), "3", "2", "0", "NULL"]);
+            CheckColumns(lines[2], ["cb7d4e65", patch.BuildTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), "0", "0", "12", "72745fcb"]);
+
+            void CheckColumns(string line, string[] values)
+            {
+                for (int i = 0; i < starts.Length; i++)
+                {
+                    string column = i + 1 < starts.Length ? line[starts[i]..starts[i + 1]] : line[starts[i]..];
+                    Check.True(column.StartsWith(values[i], StringComparison.Ordinal), $"Column {headers[i]} must be left aligned.");
+                    Check.Equal(values[i], column.TrimEnd());
+                }
             }
         });
         foreach (bool compression in new[]
@@ -327,7 +514,7 @@ internal static class CliTests
                 Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-pwd=" + password], default));
                 var baseline = TagStore.List(f.Config().StateDirectory).Single();
                 Environment.SetEnvironmentVariable(variable, "different configured password");
-                Check.Equal(0, await CommandLine.RunAsync(["diff", "-project", f.ProjectPath, "-base-tag", baseline.TagId.ToString("N"), "-pwd=" + password], default));
+                Check.Equal(0, await CommandLine.RunAsync(["diff", "-project", f.ProjectPath, "-base", baseline.TagId, "-pwd=" + password], default));
                 foreach (string command in new[]
                 {
                     "inspect",
@@ -340,7 +527,7 @@ internal static class CliTests
                 Check.Equal(0, await CommandLine.RunAsync(["unpackage", f.Output, destination, "-pwd=" + password, "-jobs", "4"], default));
                 Check.Bytes([1, 2, 3], File.ReadAllBytes(Path.Combine(destination, "common/data/a")));
                 Environment.SetEnvironmentVariable(variable, password);
-                Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base-tag", baseline.TagId.ToString("N"), "-pwd-env", variable], default));
+                Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base", baseline.TagId, "-pwd-env", variable], default));
                 Check.Equal(0, TagStore.List(f.Config().StateDirectory).OrderBy(t => t.BuildTimeUtc).Last().Outputs.Length);
             }
             finally
@@ -466,11 +653,11 @@ internal static class CliTests
             SHA256.HashData(bytes.AsSpan(0, 160), bytes.AsSpan(160, 32));
             Check.Throws<InvalidDataException>(() => PackageHeader.Decode(bytes, bytes.Length));
             File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("block-size: 65536", "block-size: 131072"));
-            Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base-tag", first.TagId.ToString("N")], default));
+            Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base", first.TagId], default));
             var second = TagStore.List(f.Config().StateDirectory).OrderBy(t => t.BuildTimeUtc).Last();
             Check.Equal(1, second.ContentChanges);
             File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("memory-mib: 16", "memory-mib: 32"));
-            Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base-tag", second.TagId.ToString("N")], default));
+            Check.Equal(0, await CommandLine.RunAsync(["package", "-project", f.ProjectPath, "-base", second.TagId], default));
             Check.Equal(0, TagStore.List(f.Config().StateDirectory).OrderBy(t => t.BuildTimeUtc).Last().Outputs.Length);
         });
         test("invalid YAML build settings are rejected", () =>
@@ -496,18 +683,34 @@ internal static class CliTests
 
             return Task.CompletedTask;
         });
-        test("baseline Tags from the previous format cannot produce incomplete patches", async () =>
+        test("baseline Tags with incompatible encoding cannot produce incomplete patches", async () =>
         {
             using var f = new Fixture();
             f.Put("a", [1]);
             var current = await f.Build();
             var old = current with
             {
-                TagId = Guid.NewGuid()
+                TagId = current.TagId == "1234abcd" ? "1234abce" : "1234abcd"
             };
             var files = TagStore.LoadFiles(f.Config().StateDirectory, current.TagId).Values.Select(file => file with { Encoding = "v1:262144:True:False:public" });
-            TagStore.Write(Path.Combine(f.Config().StateDirectory, "tags", old.TagId.ToString("N")), old, files);
+            TagStore.Write(Path.Combine(f.Config().StateDirectory, "tags", old.TagId), old, files);
             await Check.ThrowsAsync<InvalidDataException>(() => f.Build(old.TagId));
         });
+    }
+
+    private static async Task<string> CaptureOutputAsync(string[] arguments)
+    {
+        var original = Console.Out;
+        using var output = new StringWriter(CultureInfo.InvariantCulture);
+        try
+        {
+            Console.SetOut(output);
+            Check.Equal(0, await CommandLine.RunAsync(arguments, default));
+            return output.ToString();
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
     }
 }

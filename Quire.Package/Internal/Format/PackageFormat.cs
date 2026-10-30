@@ -3,10 +3,11 @@ using System.Security.Cryptography;
 
 namespace Quire.Package.Internal;
 
-internal sealed record PackageHeader(Guid TagId, long BuildTicks, bool Encrypted, int BlockSize,
+internal sealed record PackageHeader(string TagId, long BuildTicks, bool Encrypted, int BlockSize,
     int Iterations, long FileLength, long EntryCount, long DirectoryLength, long MetadataLength,
     long BlocksLength, long DataOffset, byte[] Salt)
 {
+    internal const int Version = 2;
     internal const int Size = 4096, PageSize = 65536, EntrySize = 128, BlockEntrySize = 32;
     internal const int MaxMetadataBytes = 1024 * 1024;
     internal long DirectoryOffset => Size;
@@ -20,9 +21,9 @@ internal sealed record PackageHeader(Guid TagId, long BuildTicks, bool Encrypted
     {
         byte[] bytes = new byte[Size];
         "PK.QUIRE"u8.CopyTo(bytes);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), Version);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(12), Encrypted ? 1 : 0);
-        TagId.TryWriteBytes(bytes.AsSpan(16, 16));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), PackageTag.Parse(TagId));
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(32), BuildTicks);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(40), BlockSize);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(44), Iterations);
@@ -38,17 +39,19 @@ internal sealed record PackageHeader(Guid TagId, long BuildTicks, bool Encrypted
     {
         Span<byte> digest = stackalloc byte[32];
         SHA256.HashData(bytes[..160], digest);
-        if (!bytes[..8].SequenceEqual("PK.QUIRE"u8) || BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]) != 1 ||
+        if (!bytes[..8].SequenceEqual("PK.QUIRE"u8) || BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]) != Version ||
             !CryptographicOperations.FixedTimeEquals(digest, bytes.Slice(160, 32)))
             throw new InvalidDataException("Invalid or unsupported asset header.");
+        if (bytes.Slice(20, 12).IndexOfAnyExcept((byte)0) >= 0)
+            throw new InvalidDataException("Invalid reserved Tag header bytes.");
         int flags = BinaryPrimitives.ReadInt32LittleEndian(bytes[12..]);
         if (flags is not (0 or 1)) throw new InvalidDataException("Unknown package flags.");
-        var h = new PackageHeader(new Guid(bytes.Slice(16, 16)), BinaryPrimitives.ReadInt64LittleEndian(bytes[32..]), flags == 1,
+        var h = new PackageHeader(PackageTag.Format(BinaryPrimitives.ReadUInt32LittleEndian(bytes[16..])), BinaryPrimitives.ReadInt64LittleEndian(bytes[32..]), flags == 1,
             BinaryPrimitives.ReadInt32LittleEndian(bytes[40..]), BinaryPrimitives.ReadInt32LittleEndian(bytes[44..]),
             BinaryPrimitives.ReadInt64LittleEndian(bytes[48..]), BinaryPrimitives.ReadInt64LittleEndian(bytes[56..]),
             BinaryPrimitives.ReadInt64LittleEndian(bytes[64..]), BinaryPrimitives.ReadInt64LittleEndian(bytes[72..]),
             BinaryPrimitives.ReadInt64LittleEndian(bytes[80..]), BinaryPrimitives.ReadInt64LittleEndian(bytes[88..]), bytes.Slice(96, 16).ToArray());
-        if (h.TagId == Guid.Empty || h.BuildTicks <= 0 || h.BuildTicks > DateTime.MaxValue.Ticks ||
+        if (h.BuildTicks <= 0 || h.BuildTicks > DateTime.MaxValue.Ticks ||
             h.BlockSize is < 65536 or > 1048576 || (h.BlockSize & (h.BlockSize - 1)) != 0 ||
             h.FileLength != actualLength || h.EntryCount < 0 || h.DirectoryLength < 0 || h.MetadataLength < 0 || h.BlocksLength < 0 ||
             (h.Encrypted ? h.Iterations is < 100000 or > 10000000 : h.Iterations != 0))

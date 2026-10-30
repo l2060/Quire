@@ -110,7 +110,7 @@ internal static class EnumerationTests
                 Check.True(set.EnumerateFiles().SequenceEqual(set.EnumerateFiles("", true)));
             }
 
-            using var patchOnly = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId.ToString("N")));
+            using var patchOnly = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId));
             Check.True(!patchOnly.FileExists("common/data/a/direct.bin"));
             Check.True(patchOnly.EnumerateFiles().All(info => info.Path != "common/data/a/direct.bin"));
             Check.Equal(0, patchOnly.EnumerateDirectories("common/data/a/deep").Count());
@@ -123,7 +123,7 @@ internal static class EnumerationTests
             var baseline = await fixture.Build();
             fixture.Text("orphan/deep/item.meta", "version=2");
             var patch = await fixture.Build(baseline.TagId);
-            using var set = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId.ToString("N")));
+            using var set = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId));
             Check.Equal(0, set.EnumerateFiles().Count());
             Check.Equal(0, set.EnumerateDirectories("", true).Count());
             Check.True(!set.DirectoryExists("common"));

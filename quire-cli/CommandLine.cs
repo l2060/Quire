@@ -4,6 +4,7 @@ using Quire.Cli.Extraction;
 using Quire.Cli.Progress;
 using Quire.Cli.Tags;
 using Quire.Package;
+using System.Globalization;
 
 namespace Quire.Cli;
 
@@ -15,18 +16,19 @@ internal static class CommandLine
         {
             Console.WriteLine("""
                 quire-cli init [DIRECTORY]
-                quire-cli package [-project quire.project.yml] [-base-tag TAG]
+                quire-cli package [-project quire.project.yml] [-base TAG]
                                   [-jobs N]
                                   [-pwd PASSWORD | -pwd-env NAME]
                 quire-cli unpackage SOURCE_DIRECTORY DESTINATION_DIRECTORY
                                     [-jobs N] [-pwd PASSWORD | -pwd-env NAME]
-                quire-cli diff  [-project quire.project.yml] -base-tag TAG
+                quire-cli diff  [-project quire.project.yml] -base TAG
                                 [-pwd PASSWORD | -pwd-env NAME]
                 quire-cli tags  [-project quire.project.yml]
                 quire-cli inspect DIRECTORY [-pwd PASSWORD | -pwd-env NAME]
                 quire-cli verify  DIRECTORY [-pwd PASSWORD | -pwd-env NAME]
 
-                Paths in quire.project.yml are relative to that file. State is stored in .asset/.
+                Paths in quire.project.yml are relative to that file. State is stored in .quire/.
+                Tags are 8 hexadecimal characters. -base also accepts a unique prefix (case-insensitive).
                 Meta is property=value only. Deleted source files never produce deletion records.
                 unpackage restores the merged assets and .meta files into a new or empty directory.
                 unpackage -jobs defaults to min(processor count, 8); valid range is 1..256.
@@ -67,7 +69,7 @@ internal static class CommandLine
         string[] allowed = args[0] switch
         {
             "init" => [],
-            "package" or "diff" => ["-project", "-base-tag", "-jobs", "-pwd", "-pwd-env"],
+            "package" or "diff" => ["-project", "-base", "-jobs", "-pwd", "-pwd-env"],
             "unpackage" => ["-pwd", "-pwd-env", "-jobs"],
             "tags" => ["-project"],
             "inspect" or "verify" => ["-pwd", "-pwd-env"],
@@ -134,15 +136,19 @@ internal static class CommandLine
         var project = ProjectConfig.Load(Get("-project", "quire.project.yml"));
         if (args[0] == "tags")
         {
+            const string rowFormat = "{0,-8}  {1,-24}  {2,-12}  {3,-10}  {4,-10}  {5,-8}";
+            Console.WriteLine(rowFormat, "TAG", "BUILD TIME", "OUTPUT FILES", "CONTENT", "META ONLY", "BASE");
             foreach (var tag in TagStore.List(project.StateDirectory).OrderBy(t => t.BuildTimeUtc))
-                Console.WriteLine($"{tag.TagId:N}  {tag.BuildTimeUtc:O}  content={tag.ContentChanges} meta={tag.MetadataChanges}  base={tag.BaseTag?.ToString("N") ?? "full"}");
+                Console.WriteLine(rowFormat, tag.TagId,
+                    tag.BuildTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                    tag.Outputs.Length, tag.ContentChanges, tag.MetadataChanges, tag.BaseTag ?? "NULL");
             return 0;
         }
 
         if (!project.Encrypted && suppliedPassword is not null)
             throw new ArgumentException("Password options require encryption.enabled: true in the project.");
         string? password = suppliedPassword ?? project.Password;
-        Guid? baseline = flags.TryGetValue("-base-tag", out var tagText) ? Guid.Parse(tagText) : null;
+        string? baseline = flags.TryGetValue("-base", out var tagText) ? TagStore.Resolve(project.StateDirectory, tagText) : null;
         var defaults = project.BuildOptions;
         var options = defaults with
         {
@@ -152,7 +158,7 @@ internal static class CommandLine
         if (args[0] == "diff")
         {
             if (baseline is null)
-                throw new ArgumentException("diff requires -base-tag.");
+                throw new ArgumentException("diff requires -base.");
             var plan = await ProjectBuilder.PlanAsync(project, baseline, options, password, token).ConfigureAwait(false);
             foreach (var e in plan.Changes)
                 Console.WriteLine($"{(e.MetadataOnly ? "META" : "CONTENT")}  {e.Source.Package}/{e.Source.Path}");
@@ -161,13 +167,13 @@ internal static class CommandLine
         }
 
         var built = await WithProgressAsync("package", progress => ProjectBuilder.BuildAsync(project, baseline, options, password, token, progress)).ConfigureAwait(false);
-        Console.WriteLine($"Tag: {built.TagId:N}\nTime: {built.BuildTimeUtc:O}\nContent: {built.ContentChanges}; Meta: {built.MetadataChanges}");
+        Console.WriteLine($"Tag: {built.TagId}\nTime: {built.BuildTimeUtc:O}\nContent: {built.ContentChanges}; Meta: {built.MetadataChanges}");
         foreach (var output in built.Outputs)
             Console.WriteLine(output);
         return 0;
     }
 
-    private static void PrintPackage(AssetPackageInfo package) => Console.WriteLine($"{package.BuildTimeUtc:O}  {package.TagId:N}  {package.EntryCount} entries  encrypted={package.IsEncrypted}  {package.FilePath}");
+    private static void PrintPackage(AssetPackageInfo package) => Console.WriteLine($"{package.BuildTimeUtc:O}  {package.TagId}  {package.EntryCount} entries  encrypted={package.IsEncrypted}  {package.FilePath}");
     private static async Task<T> WithProgressAsync<T>(string command, Func<ConsoleProgress, Task<T>> operation)
     {
         using var progress = new ConsoleProgress(command);

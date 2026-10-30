@@ -34,7 +34,7 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(ProjectPath, $"version: 1\noutput: ./dist\ncompression: {compression.ToString().ToLowerInvariant()}\nencryption:\n  enabled: {encryption.ToString().ToLowerInvariant()}\n  key-environment: {_variable}\npackages:\n  - name: main\n    sources:\n      - directory: ./input\n        prefix: common/data\n");
     }
     internal ProjectConfig Config() => ProjectConfig.Load(ProjectPath);
-    internal Task<BuildTag> Build(Guid? baseline = null) => ProjectBuilder.BuildAsync(Config(), baseline, BuildOptions, default);
+    internal Task<BuildTag> Build(string? baseline = null) => ProjectBuilder.BuildAsync(Config(), baseline, BuildOptions, default);
     internal void Put(string path, byte[] bytes) { string full = Path.Combine(Input, path); Directory.CreateDirectory(Path.GetDirectoryName(full)!); File.WriteAllBytes(full, bytes); }
     internal void Text(string path, string text) => Put(path, AssetPath.Utf8.GetBytes(text));
     internal static void RewriteHeader(string file, Func<PackageHeader, PackageHeader> change)

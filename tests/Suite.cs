@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
@@ -62,6 +63,7 @@ internal static class Suite
             using var f = new Fixture();
             f.Put("a.bin", [1, 2, 3]);
             var p = f.Config();
+            Check.Equal(Path.Combine(f.Root, ".quire"), p.StateDirectory);
             Check.Equal(f.Input, p.Packages[0].Sources[0].Directory);
             Check.Equal("common/data/a.bin", (await SourceScanner.ScanAsync(p, 4, default)).Single().Path);
             Check.Throws<InvalidDataException>(() => ProjectYaml.Parse("a: 1\na: 2"));
@@ -158,7 +160,7 @@ internal static class Suite
             var b = await f.Build(a.TagId);
             Check.Equal(0, b.ContentChanges);
             Check.Equal(1, b.MetadataChanges);
-            using (var only = PackageSet.Open(Path.Combine(f.Output, b.TagId.ToString("N"))))
+            using (var only = PackageSet.Open(Path.Combine(f.Output, b.TagId)))
             {
                 Check.True(!only.FileExists("common/data/a"));
                 only.Verify();
@@ -213,6 +215,8 @@ internal static class Suite
             Fixture.RewriteHeader(Path.Combine(dir, "a.asset"), h => h with { BuildTicks = a.BuildTimeUtc.UtcTicks });
             Directory.CreateDirectory(Path.Combine(dir, ".incomplete.tmp"));
             File.WriteAllText(Path.Combine(dir, ".incomplete.tmp", "bad.asset"), "unfinished");
+            Directory.CreateDirectory(Path.Combine(dir, ".quire"));
+            File.WriteAllText(Path.Combine(dir, ".quire", "bad.asset"), "internal state");
             using var tied = PackageSet.Open(dir);
             using var data = tied.Read("common/data/a");
             Check.Bytes([1], data.Data.Span);
@@ -292,6 +296,41 @@ internal static class Suite
             await set.CopyToAsync("common/data/a", output);
             Check.Bytes(data, output.ToArray());
         });
+        Test("format 2 stores complete eight-character Tags and rejects invalid header fields", async () =>
+        {
+            foreach (string id in new[] { "00000000", "ffffffff" })
+            {
+                using var f = new Fixture(false, true);
+                f.Put("a", [1, 2, 3]);
+                f.Text("a.meta", "name=tag-boundary");
+                var sources = await SourceScanner.ScanAsync(f.Config(), 2, default);
+                Directory.CreateDirectory(f.Output);
+                string file = Path.Combine(f.Output, id + ".asset");
+                await PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), id, DateTime.UtcNow.Ticks,
+                    sources.Select(source => new BuildEntry(source, false)).ToArray(), f.ReadOptions.Password, f.BuildOptions, default);
+                byte[] bytes = File.ReadAllBytes(file);
+                Check.Equal(2, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(8)));
+                Check.Equal(id == "00000000" ? 0u : uint.MaxValue, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16)));
+                Check.True(bytes.AsSpan(20, 12).IndexOfAnyExcept((byte)0) < 0);
+                Check.Equal(id, PackageHeader.Decode(bytes, bytes.Length).TagId);
+                using (var packages = PackageSet.Open(f.Output, f.ReadOptions))
+                {
+                    Check.Equal(id, packages.Packages.Single().TagId);
+                    using var asset = packages.Read("common/data/a");
+                    Check.Bytes([1, 2, 3], asset.Data.Span);
+                    Check.Equal("tag-boundary", asset.Metadata.GetString("name"));
+                    packages.Verify();
+                }
+
+                byte[] invalidVersion = bytes.ToArray();
+                BinaryPrimitives.WriteInt32LittleEndian(invalidVersion.AsSpan(8), 1);
+                SHA256.HashData(invalidVersion.AsSpan(0, 160), invalidVersion.AsSpan(160, 32));
+                Check.Throws<InvalidDataException>(() => PackageHeader.Decode(invalidVersion, invalidVersion.Length));
+                bytes[20] = 1;
+                SHA256.HashData(bytes.AsSpan(0, 160), bytes.AsSpan(160, 32));
+                Check.Throws<InvalidDataException>(() => PackageHeader.Decode(bytes, bytes.Length));
+            }
+        });
         Test("header, metadata, content corruption and truncation", async () =>
         {
             using var f = new Fixture(false);
@@ -333,7 +372,7 @@ internal static class Suite
             var source = (await SourceScanner.ScanAsync(f.Config(), 2, default)).Single();
             f.Put("a", [7, 8, 9]);
             string file = Path.Combine(f.Root, "failed.asset");
-            await Check.ThrowsAsync<Exception>(() => PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), Guid.NewGuid(), DateTime.UtcNow.Ticks, [new BuildEntry(source, false)], null, f.BuildOptions, default));
+            await Check.ThrowsAsync<Exception>(() => PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), "1234abcd", DateTime.UtcNow.Ticks, [new BuildEntry(source, false)], null, f.BuildOptions, default));
             Check.True(!File.Exists(file));
             Check.True(!File.Exists(file + ".tmp"));
         });
@@ -345,7 +384,7 @@ internal static class Suite
             cancel.Cancel();
             await Check.ThrowsAsync<OperationCanceledException>(() => ProjectBuilder.BuildAsync(f.Config(), null, f.BuildOptions, cancel.Token));
             Check.Equal(0, TagStore.List(f.Config().StateDirectory).Count());
-            await Check.ThrowsAsync<FileNotFoundException>(() => f.Build(Guid.NewGuid()));
+            await Check.ThrowsAsync<FileNotFoundException>(() => f.Build("1234abcd"));
         });
         Test("encoding configuration changes rewrite unchanged resources", async () =>
         {
@@ -411,7 +450,7 @@ internal static class Suite
 
             File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("directory: ./input", "directory: ."));
             var current = await SourceScanner.ScanAsync(f.Config(), 4, default);
-            Check.True(current.All(x => !x.Path.Contains("/.asset/", StringComparison.Ordinal) && !x.Path.Contains("/dist/", StringComparison.Ordinal)));
+            Check.True(current.All(x => !x.Path.Contains("/.quire/", StringComparison.Ordinal) && !x.Path.Contains("/dist/", StringComparison.Ordinal)));
         });
         Test("array TryGet methods and exact mixed numeric conversion", () =>
         {

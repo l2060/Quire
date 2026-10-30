@@ -3,6 +3,7 @@
 **/.vs/
 *.user
 **/.asset/
+**/.quire/
 **/dist/
 artifacts/
 *.tmp

@@ -10,7 +10,7 @@ internal sealed record PackageConfig(string Name, bool Compression, SourceConfig
 internal sealed record ProjectConfig(string FilePath, string Root, string Output, bool Encrypted, string? KeyEnvironment, PackageConfig[] Packages)
 {
     internal BuildOptions BuildOptions { get; init; } = new();
-    internal string StateDirectory => Path.Combine(Root, ".asset");
+    internal string StateDirectory => Path.Combine(Root, ".quire");
     internal string? Password => Encrypted ? Environment.GetEnvironmentVariable(KeyEnvironment!) is { Length: > 0 } p ? p :
         throw new InvalidOperationException($"Encryption requires environment variable '{KeyEnvironment}'.") : null;
 
@@ -21,8 +21,8 @@ internal sealed record ProjectConfig(string FilePath, string Root, string Output
         Check(map, "version", "output", "compression", "encryption", "build", "packages");
         if (Text(map, "version", "1") != "1") throw Error(map.Line, "Unsupported project version.");
         string output = Path.GetFullPath(Text(map, "output", "./dist"), root);
-        string state = Path.Combine(root, ".asset");
-        if (Within(output, state) || Within(root, output)) throw Error(map.Line, "Output must not contain the project root or be inside .asset.");
+        string state = Path.Combine(root, ".quire");
+        if (Within(output, state) || Within(root, output)) throw Error(map.Line, "Output must not contain the project root or be inside .quire.");
         bool compression = Bool(map, "compression", true), encrypted = false; string? keyEnvironment = null;
         var buildOptions = new BuildOptions();
         if (map.Values.TryGetValue("build", out var buildNode))
@@ -60,7 +60,7 @@ internal sealed record ProjectConfig(string FilePath, string Root, string Output
                 AssetPath.Validate(prefix, true);
                 if (!System.IO.Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
                 if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) throw Error(m.Line, "Symbolic-link source roots are not supported.");
-                if (Within(directory, state) || Within(directory, output)) throw Error(m.Line, "Source directory cannot be inside output or .asset.");
+                if (Within(directory, state) || Within(directory, output)) throw Error(m.Line, "Source directory cannot be inside output or .quire.");
                 inputs.Add(new(directory, prefix, Strings(m, "include"), Strings(m, "exclude")));
             }
             packages.Add(new(name, Bool(p, "compression", compression), inputs.ToArray()));

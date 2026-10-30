@@ -11,18 +11,18 @@ namespace Quire.Cli.Build;
 internal sealed record BuildPlan(BuildEntry[] Changes, FileState[] Files, int MissingSources);
 internal static class ProjectBuilder
 {
-    private const string EncodingPrefix = "PK.QUIRE:1:";
-    internal static async Task<BuildPlan> PlanAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
+    private const string EncodingPrefix = "PK.QUIRE:2:";
+    internal static async Task<BuildPlan> PlanAsync(ProjectConfig project, string? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
     {
         if (project.Encrypted ? string.IsNullOrEmpty(password) : password is not null)
             throw new ArgumentException("A nonempty password is required exactly when project encryption is enabled.");
         var baseline = baseTag is { } id ? TagStore.LoadFiles(project.StateDirectory, id) : new Dictionary<(string Package, string Path), FileState>();
         if (baseline.Values.Any(f => !f.Encoding.StartsWith(EncodingPrefix, StringComparison.Ordinal)))
-            throw new InvalidDataException("The base Tag uses an incompatible package format. Create a full package without -base-tag.");
+            throw new InvalidDataException("The base Tag uses an incompatible package format. Create a full package without -base.");
         var sources = await SourceScanner.ScanAsync(project, options.IoConcurrency, token, progress).ConfigureAwait(false);
         var changes = new List<BuildEntry>();
         var present = new HashSet<(string, string)>();
-        // Fingerprints stay in the local .asset directory; no credentials are serialized.
+        // Fingerprints stay in the local .quire directory; no credentials are serialized.
         string keyFingerprint = KeyFingerprint(project.StateDirectory, password);
         foreach (var source in sources)
         {
@@ -73,18 +73,20 @@ internal static class ProjectBuilder
         }
     }
 
-    internal static Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, CancellationToken token, IOperationProgress? progress = null) => BuildAsync(project, baseTag, options, project.Password, token, progress);
-    internal static async Task<BuildTag> BuildAsync(ProjectConfig project, Guid? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
+    internal static Task<BuildTag> BuildAsync(ProjectConfig project, string? baseTag, BuildOptions options, CancellationToken token, IOperationProgress? progress = null) => BuildAsync(project, baseTag, options, project.Password, token, progress);
+    internal static async Task<BuildTag> BuildAsync(ProjectConfig project, string? baseTag, BuildOptions options, string? password, CancellationToken token, IOperationProgress? progress = null)
     {
         options.Validate();
         Directory.CreateDirectory(project.StateDirectory);
         using var buildLock = new FileStream(Path.Combine(project.StateDirectory, "build.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var history = TagStore.List(project.StateDirectory).ToArray();
         var plan = await PlanAsync(project, baseTag, options, password, token, progress).ConfigureAwait(false);
-        Guid tagId = Guid.NewGuid();
-        long previous = TagStore.List(project.StateDirectory).Select(t => t.BuildTimeUtc.UtcTicks).DefaultIfEmpty(0).Max();
-        long ticks = Math.Max(DateTime.UtcNow.Ticks, checked(previous + 1));
-        string name = tagId.ToString("N");
         Directory.CreateDirectory(project.Output);
+        using var outputLock = new FileStream(Path.Combine(project.Output, ".quire-build.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        string tagId = CreateTagId(project, history);
+        long previous = history.Select(t => t.BuildTimeUtc.UtcTicks).DefaultIfEmpty(0).Max();
+        long ticks = Math.Max(DateTime.UtcNow.Ticks, checked(previous + 1));
+        string name = tagId;
         string stage = Path.Combine(project.Output, "." + name + ".tmp"), final = Path.Combine(project.Output, name);
         string scratch = Path.Combine(project.StateDirectory, "temp", name);
         string tagStage = Path.Combine(project.StateDirectory, "tags", "." + name + ".tmp"), tagFinal = Path.Combine(project.StateDirectory, "tags", name);
@@ -139,6 +141,25 @@ internal static class ProjectBuilder
             DeleteOwnedDirectory(stage, project.Output);
             DeleteOwnedDirectory(tagStage, Path.Combine(project.StateDirectory, "tags"));
             DeleteOwnedDirectory(scratch, Path.Combine(project.StateDirectory, "temp"));
+        }
+    }
+
+    internal static string CreateTagId(ProjectConfig project, IEnumerable<BuildTag> history, Func<uint>? generate = null) =>
+        TagStore.CreateId(history.Select(t => t.TagId)
+            .Concat(ReservedIds(Path.Combine(project.StateDirectory, "tags")))
+            .Concat(ReservedIds(project.Output)), generate);
+
+    private static IEnumerable<string> ReservedIds(string directory)
+    {
+        if (!Directory.Exists(directory))
+            yield break;
+        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+        {
+            string name = Path.GetFileName(path);
+            if (name.StartsWith('.') && name.EndsWith(".tmp", StringComparison.Ordinal))
+                name = name[1..^4];
+            if (PackageTag.IsValid(name))
+                yield return name;
         }
     }
 

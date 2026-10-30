@@ -341,7 +341,7 @@ internal static class MergedIndexTests
         var baseline = await fixture.Build();
         fixture.Text("orphan/deep/body.bin.meta", "revision=2");
         var patch = await fixture.Build(baseline.TagId);
-        string patchDirectory = Path.Combine(fixture.Output, patch.TagId.ToString("N"));
+        string patchDirectory = Path.Combine(fixture.Output, patch.TagId);
         foreach (var storage in StorageOptions())
         {
             using var orphan = PackageSet.Open(patchDirectory, storage with

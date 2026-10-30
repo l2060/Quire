@@ -1,10 +1,10 @@
 # 所有相对目录均以本文件所在目录为基准，不随命令执行目录变化。
-# 构建索引固定存入旁边的 .asset/，不需要也不支持配置索引目录。
+# 构建索引固定存入旁边的 .quire/，不需要也不支持配置索引目录。
 
 # 可选；默认 1，目前只支持 1。
 version: 1
 # 可选；默认 ./dist。实际产物为 <output>/<TagID>/<包名>.asset。
-# 不能包含项目根目录，也不能位于 .asset/ 内；缺少的输出目录在打包时创建。
+# 不能包含项目根目录，也不能位于 .quire/ 内；缺少的输出目录在打包时创建。
 output: ./dist
 # 可选；默认 true。true 使用 LZ4，false 不压缩；压缩无收益的块保存原始数据。
 # 这是全局默认值，可被下面每个包的 compression 覆盖。
@@ -41,7 +41,7 @@ packages:
     # 必填；至少一个源目录，无默认值。这里的两个目录合并到同一个包。
     sources:
       # 必填；无默认值，打包前必须存在。支持绝对目录和相对本文件的目录。
-      # 源目录可以位于项目之外，但不能位于输出目录或 .asset/ 中。
+      # 源目录可以位于项目之外，但不能位于输出目录或 .quire/ 中。
       - directory: ./assets/common
         # 可选；默认空字符串，即直接使用源目录中的相对文件路径。
         # 支持 common/data 等多级目录，统一使用 /，不能包含 . 或 .. 路径段。
@@ -87,6 +87,6 @@ packages:
 # Meta 固定为 file.ext.meta，采用 property=value；没有 Meta 时省略 sidecar。
 # 空 sidecar 表示存在空 Meta；不配置 metadata.format。
 # 首次打包：quire-cli package -jobs 5
-# 增量打包：quire-cli package -base-tag TAG -jobs 5
+# 增量打包：quire-cli package -base TAG -jobs 5（TAG 可使用唯一的十六进制前缀）
 # 加密打包：先设置 enabled: true，再执行 quire-cli package -pwd YOUR_PASSWORD
 # 并发解包：quire-cli unpackage ./dist ./unpacked -jobs 5

@@ -83,7 +83,7 @@ public sealed class PackageSet : IDisposable, IAsyncDisposable
                 continue;
             if (item is DirectoryInfo)
             {
-                if (recursive && item.Name != ".asset" && !item.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                if (recursive && item.Name != ".quire" && !item.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
                     foreach (var path in Discover(item.FullName, true))
                         yield return path;
             }
