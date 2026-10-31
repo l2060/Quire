@@ -97,7 +97,7 @@ internal static class CliFailureTests
     private static void AssertWriterClosed(string destination, string scratch, string source)
     {
         Check.True(!File.Exists(destination), "A failed write published its destination.");
-        Check.True(!File.Exists(destination + ".tmp"), "A failed write retained its temporary output.");
+        Check.True(!Directory.EnumerateFiles(Path.GetDirectoryName(destination)!, "*.tmp").Any(), "A failed write retained its temporary output.");
         using var input = new FileStream(source, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         using var table = new FileStream(Path.Combine(scratch, "blocks.bin"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
     }

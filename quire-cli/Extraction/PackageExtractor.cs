@@ -15,8 +15,8 @@ internal static class PackageExtractor
         int concurrency = jobs ?? DefaultJobs;
         if (concurrency is < 1 or > 256)
             throw new ArgumentOutOfRangeException(nameof(jobs), "Extraction jobs must be between 1 and 256.");
-        string source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceDirectory));
-        string destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationDirectory));
+        string source = NormalizePath(sourceDirectory);
+        string destination = NormalizePath(destinationDirectory);
         if (ProjectConfig.Within(source, destination) || ProjectConfig.Within(destination, source))
             throw new ArgumentException("Source and destination directories must not overlap.");
         RejectLinks(source);
@@ -93,6 +93,23 @@ internal static class PackageExtractor
     }
 
     private static FileStream CreateFile(string path) => new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+    private static string NormalizePath(string path)
+    {
+        path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!OperatingSystem.IsMacOS()) return path;
+
+        // macOS exposes system directories through these root aliases, including its
+        // default temporary directory under /var. Resolve only the standard direct
+        // targets; RejectLinks still checks every component of the resulting path.
+        int separator = path.IndexOf('/', 1);
+        string alias = separator < 0 ? path : path[..separator];
+        if (alias is not ("/var" or "/tmp" or "/etc")) return path;
+        var target = Directory.ResolveLinkTarget(alias, returnFinalTarget: false);
+        string expected = "/private" + alias;
+        if (target is null || !target.FullName.Equals(expected, StringComparison.Ordinal)) return path;
+        return expected + path[alias.Length..];
+    }
+
     private static void RequireEmpty(string directory)
     {
         if (File.Exists(directory) || (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any()))

@@ -2,7 +2,9 @@
 using System.Text;
 using Quire;
 using Quire.Cli;
+using Quire.Cli.Build;
 using Quire.Cli.Configuration;
+using Quire.Cli.Sources;
 using Quire.Cli.Tags;
 using Quire.Internal;
 
@@ -14,6 +16,7 @@ internal static class PackageNameTests
         test("Automatic and named Tags produce matching expanded package filenames and manifests", BuildNamesAsync);
         test("Dynamic package names preserve unchanged content and route metadata and deletion updates", IncrementalsAsync);
         test("Package name templates reject malformed variables, unsafe names and resolved collisions", ValidationAsync);
+        test("Package staging preserves unrelated files and cleans failures before and after writing", TemporaryOutputAsync);
         test("Logical resource precedence follows original templates when expanded order reverses", PrecedenceAsync);
     }
 
@@ -180,12 +183,58 @@ internal static class PackageNameTests
             Check.Equal(0, TagStore.List(fixture.Config().StateDirectory).Count());
         }
         // 249 UTF-8 bytes plus ".asset" fits the actual filename limit exactly.
-        string boundary = new string('\u4e2d', 83);
-        WriteConfig(fixture, new Package(boundary, "./input", "assets"));
-        var valid = await Build(fixture, "boundary");
-        Check.Equal(255, AssetPath.Utf8.GetByteCount(Path.GetFileName(valid.Outputs.Single())));
-        TagStore.Commit(fixture.Config().StateDirectory, valid.TagId);
-        Check.Equal(boundary, TagStore.LoadBaseline(fixture.Config().StateDirectory).Files.Values.Single().Package);
+        // Temporary output names must not extend either ASCII or multibyte names.
+        byte content = 1;
+        foreach (string boundary in new[] { new string('x', 249), new string('\u4e2d', 83) })
+        {
+            fixture.Put("item", [content]);
+            WriteConfig(fixture, new Package(boundary, "./input", "assets"));
+            var valid = await Build(fixture, "boundary-" + content);
+            Check.Equal(255, AssetPath.Utf8.GetByteCount(Path.GetFileName(valid.Outputs.Single())));
+            TagStore.Commit(fixture.Config().StateDirectory, valid.TagId);
+            Check.Equal(boundary, TagStore.LoadBaseline(fixture.Config().StateDirectory).Files.Values.Single().Package);
+            using var bundle = QuireBundle.Open(Path.Combine(fixture.Output, valid.Name));
+            using var data = bundle.Read("assets/item");
+            Check.Bytes([content], data.Data.Span);
+            Check.Equal(0, Directory.GetFiles(fixture.Root, "*.tmp", SearchOption.AllDirectories).Length);
+            content++;
+        }
+    }
+
+    private static async Task TemporaryOutputAsync()
+    {
+        using var fixture = new Fixture(false);
+        fixture.Put("item", [1, 2, 3]);
+        var source = (await SourceScanner.ScanAsync(fixture.Config(), 1, default)).Single();
+        Directory.CreateDirectory(fixture.Output);
+        string destination = Path.Combine(fixture.Output, "main.asset");
+        string unrelated = destination + ".tmp";
+        File.WriteAllBytes(unrelated, [9]);
+        string occupiedScratch = Path.Combine(fixture.Root, "occupied-scratch");
+        Directory.CreateDirectory(occupiedScratch);
+        string occupiedTable = Path.Combine(occupiedScratch, "blocks.bin");
+        File.WriteAllBytes(occupiedTable, [8]);
+        await Check.ThrowsAsync<IOException>(() => Write(occupiedScratch));
+        Check.True(!File.Exists(destination));
+        Check.Bytes([8], File.ReadAllBytes(occupiedTable));
+        AssertTemporaryFiles();
+
+        await Write(Path.Combine(fixture.Root, "success-scratch"));
+        byte[] original = File.ReadAllBytes(destination);
+        using (var bundle = QuireBundle.Open(fixture.Output))
+        using (var data = bundle.Read(source.Path)) Check.Bytes([1, 2, 3], data.Data.Span);
+        AssertTemporaryFiles();
+        await Check.ThrowsAsync<IOException>(() => Write(Path.Combine(fixture.Root, "conflict-scratch")));
+        Check.Bytes(original, File.ReadAllBytes(destination));
+        AssertTemporaryFiles();
+
+        Task Write(string scratch) => PackageWriter.WriteAsync(destination, scratch, "1234abcd", DateTime.UtcNow.Ticks,
+            [new(source, EntryKind.Content)], null, fixture.BuildOptions, default);
+        void AssertTemporaryFiles()
+        {
+            Check.Bytes([9], File.ReadAllBytes(unrelated));
+            Check.True(Directory.GetFiles(fixture.Output, "*.tmp").SequenceEqual(new[] { unrelated }));
+        }
     }
 
     private static async Task PrecedenceAsync()

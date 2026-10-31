@@ -406,6 +406,67 @@ internal static class CliTests
             await Check.ThrowsAsync<InvalidDataException>(() => PackageExtractor.ExtractAsync(empty, Path.Combine(f.Root, "other"), f.ReadOptions, default));
             Check.True(!Directory.Exists(Path.Combine(f.Root, "other")));
         });
+        test("unpackage still rejects user directory links and linked ancestors", async () =>
+        {
+            using var f = new Fixture(false);
+            f.Put("a", [1]);
+            await f.Build();
+            string alias = Path.Combine(f.Root, "linked-packages");
+            try
+            {
+                Directory.CreateSymbolicLink(alias, f.Output);
+            }
+            catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+            {
+                return; // Windows without Developer Mode requires elevation for links.
+            }
+            catch (IOException error) when (OperatingSystem.IsWindows() && (error.HResult & 0xffff) == 1314)
+            {
+                return;
+            }
+            try
+            {
+                string destination = Path.Combine(f.Root, "unpacked");
+                await Check.ThrowsAsync<IOException>(() => PackageExtractor.ExtractAsync(alias, destination, f.ReadOptions, default));
+                await Check.ThrowsAsync<IOException>(() => PackageExtractor.ExtractAsync(f.Output, Path.Combine(alias, "nested"), f.ReadOptions, default));
+                Check.True(!Directory.Exists(destination));
+                Check.True(!Directory.Exists(Path.Combine(f.Output, "nested")));
+            }
+            finally { Directory.Delete(alias); }
+        });
+        if (OperatingSystem.IsMacOS())
+            test("unpackage normalizes macOS system aliases before checking overlap", async () =>
+            {
+                using var f = new Fixture(false);
+                string? aliasRoot = null, physicalRoot = null;
+                foreach (string alias in new[] { "/var", "/tmp", "/etc" })
+                {
+                    string expected = "/private" + alias;
+                    if (Directory.ResolveLinkTarget(alias, returnFinalTarget: false)?.FullName != expected) continue;
+                    if (f.Root.StartsWith(alias + "/", StringComparison.Ordinal))
+                    {
+                        aliasRoot = f.Root;
+                        physicalRoot = expected + f.Root[alias.Length..];
+                        break;
+                    }
+                    if (f.Root.StartsWith(expected + "/", StringComparison.Ordinal))
+                    {
+                        aliasRoot = alias + f.Root[expected.Length..];
+                        physicalRoot = f.Root;
+                        break;
+                    }
+                }
+                if (aliasRoot is null || physicalRoot is null) return;
+                f.Put("a", [1, 2, 3]);
+                await f.Build();
+                string aliasSource = Path.Combine(aliasRoot, "dist"), physicalSource = Path.Combine(physicalRoot, "dist");
+                await Check.ThrowsAsync<ArgumentException>(() => PackageExtractor.ExtractAsync(aliasSource, physicalSource, f.ReadOptions, default));
+                await Check.ThrowsAsync<ArgumentException>(() => PackageExtractor.ExtractAsync(physicalSource, Path.Combine(aliasSource, "nested"), f.ReadOptions, default));
+                string destination = Path.Combine(aliasRoot, "unpacked");
+                var extracted = await PackageExtractor.ExtractAsync(physicalSource, destination, f.ReadOptions, default);
+                Check.Equal(1L, extracted.Assets);
+                Check.Bytes([1, 2, 3], File.ReadAllBytes(Path.Combine(destination, "common/data/a")));
+            });
         test("unpackage corruption and cancellation leave no output", async () =>
         {
             using var f = new Fixture(false);

@@ -81,12 +81,16 @@ internal static class PackageWriter
         byte[] key = BlockCipher.DeriveKey(header, publisherKey?.ClientKey);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
         var ct = cancellation.Token;
-        string temporary = destination + ".tmp";
+        // Keep staging names independent of the final name, which may already use
+        // all 255 UTF-8 bytes allowed by the filesystem for one path component.
+        string temporary = Path.Combine(Path.GetDirectoryName(destination) ?? string.Empty, ".quire-package-" + Guid.NewGuid().ToString("N") + ".tmp");
+        bool temporaryOwned = false;
         try
         {
             await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous | FileOptions.RandomAccess))
-            await using (var blockTable = new FileStream(Path.Combine(scratch, "blocks.bin"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous | FileOptions.RandomAccess))
             {
+                temporaryOwned = true;
+                await using var blockTable = new FileStream(Path.Combine(scratch, "blocks.bin"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous | FileOptions.RandomAccess);
                 await using var authentication = publisherKey is null ? null : new FileStream(Path.Combine(scratch, "authentication.bin"),
                     FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous | FileOptions.RandomAccess);
                 authentication?.SetLength(header.AuthenticationLength);
@@ -297,12 +301,13 @@ internal static class PackageWriter
             }
             token.ThrowIfCancellationRequested();
             File.Move(temporary, destination);
+            temporaryOwned = false;
             progress?.Advance(files: entries.LongLength);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(key);
-            if (File.Exists(temporary)) File.Delete(temporary);
+            if (temporaryOwned) File.Delete(temporary);
         }
     }
     private static async Task ProtectSectionAsync(FileStream source, FileStream destination, long offset, PackageHeader header,

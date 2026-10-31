@@ -168,7 +168,8 @@ internal static class SourceRootTests
         {
             Environment.CurrentDirectory = f.Root;
             var relative = ProjectConfig.Load("./repository/quire.game.yml", "./remote");
-            Check.Equal(overridden.Packages[0].Sources[0].Directory, relative.Packages[0].Sources[0].Directory);
+            // macOS may report /private/var for a working directory supplied through /var.
+            Check.Equal(Path.GetFullPath("./remote/textures"), relative.Packages[0].Sources[0].Directory);
             var result = await RunStructured("diff", "-f", "./repository/quire.game.yml", "-root", "./remote", "-progress");
             string[] paths = result.Where(item => item.GetProperty("type").GetString() == "item")
                 .Select(item => item.GetProperty("data").GetProperty("path").GetString()!).Order().ToArray();
