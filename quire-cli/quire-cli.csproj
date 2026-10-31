@@ -16,17 +16,21 @@
 		<PackageProjectUrl>https://github.com/l2060/Quire</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/l2060/Quire</RepositoryUrl>
 		<PackageIcon>icon.png</PackageIcon>
+		<Version>1.0.1</Version>
 	</PropertyGroup>
 	<ItemGroup>
-		<ProjectReference Include="../Quire.Package/Quire.Package.csproj" />
-		<InternalsVisibleTo Include="Quire.Package.Tests" />
-		<InternalsVisibleTo Include="Quire.Package.Benchmarks" />
+		<InternalsVisibleTo Include="Quire.Tests" />
+		<InternalsVisibleTo Include="Quire.Benchmarks" />
 		<None Include="../README.md" Pack="true" PackagePath="/" />
 		<None Include="..\icon.png">
 		  <Pack>True</Pack>
 		  <PackagePath>\</PackagePath>
 		</None>
 		<EmbeddedResource Include="Templates/quire.project.yml" LogicalName="Quire.Cli.Templates.quire.project.yml" />
+	</ItemGroup>
+	<ItemGroup>
+	  <ProjectReference Include="..\Quire\Quire.csproj" />
+	  <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
 	</ItemGroup>
 	<Target Name="NameNativeExecutable" AfterTargets="CopyNativeBinary" Condition="'$(PublishAot)' == 'true'">
 		<Move SourceFiles="$(PublishDir)$(AssemblyName)$(NativeBinaryExt)" DestinationFiles="$(PublishDir)quire-cli$(NativeBinaryExt)" />

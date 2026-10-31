@@ -1,9 +1,22 @@
+using Quire.Internal;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
-using Quire.Package;
+using Quire;
+
+if (args.Length > 0 && args[0] == "--build-state")
+{
+    BuildStateBenchmarks.Run(args.Length > 1 ? args[1] : "benchmarks/results/build-state.json");
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--dir")
+{
+    await DirBenchmarks.RunAsync(args.Length > 1 ? args[1] : "benchmarks/results/dir.json");
+    return;
+}
 
 if (args.Length > 0 && args[0] == "--merged-index")
 {
@@ -30,7 +43,7 @@ string input = Path.Combine(root, "input");
 Directory.CreateDirectory(input);
 var results = new List<Measurement>();
 var metadataResults = new List<object>();
-Environment.SetEnvironmentVariable("ASSET_BENCHMARK_PASSWORD", "benchmark-only-password");
+using var signing = PublisherKey.Import(RandomNumberGenerator.GetBytes(64));
 try
 {
     var random = new Random(1729);
@@ -68,9 +81,9 @@ try
             string projectRoot = Path.Combine(root, profile);
             Directory.CreateDirectory(projectRoot);
             string yaml = Path.Combine(projectRoot, "quire.project.yml");
-            File.WriteAllText(yaml, $"version: 1\noutput: ./dist\ncompression: {compressed.ToString().ToLowerInvariant()}\nencryption:\n  enabled: {encrypted.ToString().ToLowerInvariant()}\n  key-environment: ASSET_BENCHMARK_PASSWORD\npackages:\n  - name: data\n    sources:\n      - directory: ../input\n        prefix: data\n");
+            File.WriteAllText(yaml, $"version: 1\nproject: benchmark\noutput: ./dist\ncompression: {(compressed ? "lz4" : "none")}\ncompression-policy: adaptive\nsecret-key: {(encrypted ? "benchmark" : "none")}\npackages:\n  - name: data\n    sources:\n      - directory: ../input\n        prefix: data\n");
             Console.WriteLine($"Building {profile}...");
-            await ProjectBuilder.BuildAsync(ProjectConfig.Load(yaml), null, new BuildOptions { Jobs = 4, IoConcurrency = 4 }, default);
+            await ProjectBuilder.BuildAsync(ProjectConfig.Load(yaml), null, new BuildOptions { Jobs = 4, IoConcurrency = 4 }, encrypted ? signing : null, default);
             string output = Path.Combine(projectRoot, "dist");
             string[] paths = Enumerable.Range(0, files).Select(i => $"data/f{i:D5}.bin").ToArray();
             int[] order = Enumerable.Range(0, operations).Select(_ => random.Next(files)).ToArray();
@@ -92,11 +105,11 @@ try
                 string backend = mapped ? "MemoryMapped" : "RandomAccess";
                 var options = new ReadOptions
                 {
-                    Password = encrypted ? "benchmark-only-password" : null,
+                    Key = encrypted ? signing.ClientKey : null,
                     ReadMode = mapped ? AssetReadMode.MemoryMapped : AssetReadMode.RandomAccess
                 };
                 var opening = Stopwatch.StartNew();
-                using var assets = PackageSet.Open(output, options);
+                using var assets = QuireBundle.Open(output, options);
                 opening.Stop();
                 byte[] warm = new byte[4096];
                 foreach (string path in paths)
@@ -227,7 +240,7 @@ try
         Files = files,
         Operations = operations,
         Cache = "Warm OS cache; no cold-disk claims. Same-process repeated rounds; order alternates across profiles.",
-        LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(PackageSet).Assembly.Location))),
+        LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(QuireBundle).Assembly.Location))),
         Measurements = results,
         Metadata = metadataResults
     };
@@ -236,7 +249,6 @@ try
 }
 finally
 {
-    Environment.SetEnvironmentVariable("ASSET_BENCHMARK_PASSWORD", null);
     string resolved = Path.GetFullPath(root);
     if (!ProjectConfig.Within(resolved, Path.GetFullPath(Path.GetTempPath())) || !Path.GetFileName(resolved).StartsWith("asset-benchmark-", StringComparison.Ordinal))
         throw new IOException("Unsafe benchmark cleanup.");

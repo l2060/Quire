@@ -10,8 +10,11 @@ internal sealed class Glob
     internal Glob(string pattern, bool basename = false, bool subtree = false)
     {
         if (pattern.Length > 4096) throw new InvalidDataException("Ignore pattern is too long.");
+        // Scanner paths are relative to the source root and never start with "./".
+        int start = 0;
+        while (pattern.AsSpan(start).StartsWith("./", StringComparison.Ordinal)) start += 2;
         var b = new StringBuilder(basename ? "(?:^|/)" : "^");
-        for (int i = 0; i < pattern.Length; i++)
+        for (int i = start; i < pattern.Length; i++)
         {
             char c = pattern[i];
             if (c == '*' && i + 1 < pattern.Length && pattern[i + 1] == '*')

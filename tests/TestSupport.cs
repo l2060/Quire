@@ -4,8 +4,8 @@ using Microsoft.Win32.SafeHandles;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
 using Quire.Cli.Tags;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 internal static class Check
 {
@@ -24,17 +24,39 @@ internal sealed class Fixture : IDisposable
     internal string Input => Path.Combine(Root, "input");
     internal string Output => Path.Combine(Root, "dist");
     internal string ProjectPath => Path.Combine(Root, "quire.project.yml");
-    private readonly string _variable = "ASSET_TEST_KEY_" + Guid.NewGuid().ToString("N");
+    internal string KeyName { get; } = "test-" + Guid.NewGuid().ToString("N");
     internal ReadOptions ReadOptions { get; }
     internal BuildOptions BuildOptions { get; } = new() { Jobs = 4, IoConcurrency = 4 };
     internal Fixture(bool compression = true, bool encryption = false)
+        : this(compression ? CompressionAlgorithm.Lz4 : CompressionAlgorithm.None, encryption) { }
+
+    internal Fixture(CompressionAlgorithm compression, bool encryption = false, CompressionPolicy policy = CompressionPolicy.Adaptive)
     {
-        Directory.CreateDirectory(Input); Environment.SetEnvironmentVariable(_variable, "test password; secret");
-        ReadOptions = new() { Password = encryption ? "test password; secret" : null };
-        File.WriteAllText(ProjectPath, $"version: 1\noutput: ./dist\ncompression: {compression.ToString().ToLowerInvariant()}\nencryption:\n  enabled: {encryption.ToString().ToLowerInvariant()}\n  key-environment: {_variable}\npackages:\n  - name: main\n    sources:\n      - directory: ./input\n        prefix: common/data\n");
+        Directory.CreateDirectory(Input);
+        ReadOptions = new() { Key = encryption ? TestKeys.Client : null };
+        if (encryption) InitializeKeys();
+        File.WriteAllText(ProjectPath, $"version: 1\nproject: test-project\noutput: ./dist/{{tag}}\ncompression: {compression.ToString().ToLowerInvariant()}\ncompression-policy: {policy.ToString().ToLowerInvariant()}\nsecret-key: {(encryption ? KeyName : "none")}\npackages:\n  - name: main\n    sources:\n      - directory: ./input\n        prefix: common/data\n");
+    }
+    internal string ClientKeyPath => Path.Combine(Root, "client.key");
+    internal void InitializeKeys()
+    {
+        using var key = TestKeys.Create();
+        SecretKeyStore.Add(KeyName, key, default);
+        SecretKeyStore.ExportClient(KeyName, ClientKeyPath, default);
+    }
+    internal void RemoveKeys()
+    {
+        string path = SecretKeyStore.GetStoragePath(KeyName);
+        if (File.Exists(path)) File.Delete(path);
     }
     internal ProjectConfig Config() => ProjectConfig.Load(ProjectPath);
-    internal Task<BuildTag> Build(string? baseline = null) => ProjectBuilder.BuildAsync(Config(), baseline, BuildOptions, default);
+    // Runtime overlay tests explicitly accept their previous candidate before building the next layer.
+    internal async Task<BuildTag> Build(string? baseline = null)
+    {
+        var project = Config();
+        if (baseline is not null) TagStore.Commit(project.StateDirectory, baseline);
+        return await ProjectBuilder.BuildAsync(project, null, BuildOptions, default);
+    }
     internal void Put(string path, byte[] bytes) { string full = Path.Combine(Input, path); Directory.CreateDirectory(Path.GetDirectoryName(full)!); File.WriteAllBytes(full, bytes); }
     internal void Text(string path, string text) => Put(path, AssetPath.Utf8.GetBytes(text));
     internal static void RewriteHeader(string file, Func<PackageHeader, PackageHeader> change)
@@ -45,7 +67,7 @@ internal sealed class Fixture : IDisposable
     }
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(_variable, null);
+        RemoveKeys();
         string root = Path.GetFullPath(Root), temp = Path.GetFullPath(Path.GetTempPath());
         if (!ProjectConfig.Within(root, temp) || !Path.GetFileName(root).StartsWith("asset-tests-", StringComparison.Ordinal)) throw new Exception("Unsafe test cleanup.");
         Directory.Delete(root, true);
@@ -58,4 +80,19 @@ internal static class SparseFile
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeviceIoControl(SafeFileHandle handle, uint control, IntPtr input, uint inputSize, IntPtr output, uint outputSize, out uint returned, IntPtr overlapped);
+}
+
+internal static class TestKeys
+{
+    private static readonly byte[] Material = Enumerable.Range(1, 64).Select(i => (byte)i).ToArray();
+    internal static PublisherKey Create() => PublisherKey.Import(Material);
+    internal static AssetKey Client { get; } = GetClient();
+    internal static AssetKey OtherClient { get; } = GetClient(other: true);
+    private static AssetKey GetClient(bool other = false)
+    {
+        byte[] bytes = (byte[])Material.Clone();
+        if (other) bytes[40] ^= 1;
+        using var key = PublisherKey.Import(bytes);
+        return key.ClientKey;
+    }
 }

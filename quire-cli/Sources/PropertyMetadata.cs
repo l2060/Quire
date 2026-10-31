@@ -4,8 +4,8 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Quire.Cli.Serialization;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 namespace Quire.Cli.Sources;
 

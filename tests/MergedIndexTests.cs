@@ -1,6 +1,6 @@
 using System.Reflection;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 internal static class MergedIndexTests
 {
@@ -21,7 +21,7 @@ internal static class MergedIndexTests
     {
         Type strategyType = typeof(AssetIndexMode);
         Check.True(!strategyType.IsVisible);
-        Check.True(!typeof(PackageSet).Assembly.GetExportedTypes().Contains(strategyType));
+        Check.True(!typeof(QuireBundle).Assembly.GetExportedTypes().Contains(strategyType));
 
         Type optionsType = typeof(ReadOptions);
         Check.True(optionsType.GetProperty(nameof(ReadOptions.IndexMode), BindingFlags.Instance | BindingFlags.Public) is null);
@@ -47,10 +47,10 @@ internal static class MergedIndexTests
 
         using var fixture = new Fixture(false);
         Directory.CreateDirectory(fixture.Output);
-        using var automatic = PackageSet.Open(fixture.Output);
+        using var automatic = QuireBundle.Open(fixture.Output);
         Check.True(automatic.IndexInfo.IsMerged);
         Check.True(!automatic.IndexInfo.IsFallback);
-        using var constrained = PackageSet.Open(fixture.Output, new ReadOptions
+        using var constrained = QuireBundle.Open(fixture.Output, new ReadOptions
         {
             MaxMergedIndexBytes = 0
         });
@@ -121,15 +121,17 @@ internal static class MergedIndexTests
             if (revision == 1)
             {
                 File.Delete(Path.Combine(fixture.Input, "collision"));
+                expected.Remove(Root + "/collision");
                 fixture.Put("collision/child.bin", [40, 41]);
                 expected.Add(Root + "/collision/child.bin", new([40, 41], null));
                 File.Delete(Path.Combine(fixture.Input, "retained.bin"));
+                expected.Remove(Root + "/retained.bin");
             }
 
             previous = await fixture.Build(previous.TagId);
         }
 
-        AssetInfo[] expectedFiles = expected.Select(pair => new AssetInfo(pair.Key, pair.Value.Bytes.Length, pair.Value.Revision.HasValue)).OrderBy(info => info.Path, AssetPath.Comparer).ToArray();
+        AssetEntryInfo[] expectedFiles = expected.Select(pair => new AssetEntryInfo(pair.Key, AssetEntryKind.File, pair.Value.Bytes.Length, pair.Value.Revision.HasValue)).OrderBy(info => info.Path, AssetPath.Comparer).ToArray();
         string[] expectedDirectories = Directories(expectedFiles, "", true);
         string[] scopes = expectedDirectories.Concat(["", "common/dat", Root + "/missing", Root + "/root.bin", Root + "/a/de", Root + "/😀/missing"]).ToArray();
         foreach (var storage in StorageOptions())
@@ -157,7 +159,7 @@ internal static class MergedIndexTests
 
             )
             {
-                using var packages = await PackageSet.OpenAsync(fixture.Output, mode);
+                using var packages = await QuireBundle.OpenAsync(fixture.Output, mode);
                 Check.Equal(7, packages.Packages.Count);
                 bool merged = mode.IndexMode != AssetIndexMode.PerPackage && mode.MaxMergedIndexBytes != 0;
                 Check.Equal(merged, packages.IndexInfo.IsMerged);
@@ -182,6 +184,7 @@ internal static class MergedIndexTests
                     Check.Equal(info, actual);
                     Check.Equal(info, packages.GetFileInfo(info.Path));
                     using var data = packages.Read(info.Path);
+                    Check.Equal(info, data.Info);
                     var model = expected[info.Path];
                     Check.Bytes(model.Bytes, data.Data.Span);
                     if (model.Revision.HasValue)
@@ -213,7 +216,7 @@ internal static class MergedIndexTests
                     }
                 }
 
-                Check.True(packages.FileExists(Root + "/collision"));
+                Check.True(!packages.FileExists(Root + "/collision"));
                 Check.True(packages.DirectoryExists(Root + "/collision"));
                 Check.True(!packages.TryGetFileInfo(Root + "/absent", out var absent));
                 Check.Equal(default, absent);
@@ -249,7 +252,7 @@ internal static class MergedIndexTests
 
             )
             {
-                using var packages = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = mode, MaxMergedIndexBytes = budget });
+                using var packages = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = mode, MaxMergedIndexBytes = budget });
                 Check.True(packages.IndexInfo.IsMerged);
                 Check.Equal(required, packages.IndexInfo.MemoryBytes);
                 Check.Equal<int?>(3, packages.IndexInfo.FileCount);
@@ -271,22 +274,22 @@ internal static class MergedIndexTests
                 IndexMode = AssetIndexMode.Auto,
                 MaxMergedIndexBytes = budget
             };
-            using var fallback = PackageSet.Open(fixture.Output, options);
+            using var fallback = QuireBundle.Open(fixture.Output, options);
             AssertPerPackageDiagnostics(fallback);
             Check.True(fallback.IndexInfo.IsFallback);
             Check.Equal(3, fallback.EnumerateFiles().Count());
             Check.Equal(4, fallback.EnumerateDirectories().Count());
-            Check.Throws<InvalidOperationException>(() => PackageSet.Open(fixture.Output, options with { IndexMode = AssetIndexMode.Merged }));
+            Check.Throws<InvalidOperationException>(() => QuireBundle.Open(fixture.Output, options with { IndexMode = AssetIndexMode.Merged }));
             await Check.ThrowsAsync<InvalidOperationException>(async () =>
             {
-                using var rejected = await PackageSet.OpenAsync(fixture.Output, options with
+                using var rejected = await QuireBundle.OpenAsync(fixture.Output, options with
                 {
                     IndexMode = AssetIndexMode.Merged
                 });
             });
         }
 
-        using (var perPackage = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.PerPackage, MaxMergedIndexBytes = 0 }))
+        using (var perPackage = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.PerPackage, MaxMergedIndexBytes = 0 }))
         {
             AssertPerPackageDiagnostics(perPackage);
             Check.True(!perPackage.IndexInfo.IsFallback);
@@ -311,10 +314,10 @@ internal static class MergedIndexTests
 
         )
         {
-            Check.Throws<ArgumentOutOfRangeException>(() => PackageSet.Open(fixture.Output, invalid));
+            Check.Throws<ArgumentOutOfRangeException>(() => QuireBundle.Open(fixture.Output, invalid));
             await Check.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
             {
-                using var rejected = await PackageSet.OpenAsync(fixture.Output, invalid);
+                using var rejected = await QuireBundle.OpenAsync(fixture.Output, invalid);
             });
         }
     }
@@ -323,19 +326,19 @@ internal static class MergedIndexTests
     {
         using var fixture = new Fixture(false);
         Directory.CreateDirectory(fixture.Output);
-        using (var empty = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxMergedIndexBytes = 40 }))
+        using (var empty = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxMergedIndexBytes = 40 }))
         {
             AssertEmptyMerged(empty);
         }
 
-        using (var fallback = PackageSet.Open(fixture.Output, new ReadOptions { MaxMergedIndexBytes = 39 }))
+        using (var fallback = QuireBundle.Open(fixture.Output, new ReadOptions { MaxMergedIndexBytes = 39 }))
         {
             AssertPerPackageDiagnostics(fallback);
             Check.True(fallback.IndexInfo.IsFallback);
             Check.True(fallback.DirectoryExists(""));
         }
 
-        Check.Throws<InvalidOperationException>(() => PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxMergedIndexBytes = 0 }));
+        Check.Throws<InvalidOperationException>(() => QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxMergedIndexBytes = 0 }));
         fixture.Put("orphan/deep/body.bin", [1, 2, 3]);
         fixture.Text("orphan/deep/body.bin.meta", "revision=1");
         var baseline = await fixture.Build();
@@ -344,7 +347,7 @@ internal static class MergedIndexTests
         string patchDirectory = Path.Combine(fixture.Output, patch.TagId);
         foreach (var storage in StorageOptions())
         {
-            using var orphan = PackageSet.Open(patchDirectory, storage with
+            using var orphan = QuireBundle.Open(patchDirectory, storage with
             {
                 IndexMode = AssetIndexMode.Merged,
                 MaxMergedIndexBytes = 40
@@ -377,7 +380,7 @@ internal static class MergedIndexTests
             var progress = new IndexProgress(cancellation, completedFiles == 0, completedFiles);
             await Check.ThrowsAsync<OperationCanceledException>(async () =>
             {
-                using var rejected = await PackageSet.OpenAsync(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxResidentIndexBytes = 0, PageCacheBytes = 0, Progress = progress }, cancellation.Token);
+                using var rejected = await QuireBundle.OpenAsync(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, MaxResidentIndexBytes = 0, PageCacheBytes = 0, Progress = progress }, cancellation.Token);
             });
             Check.True(progress.SawBuildStage);
             if (completedFiles > 0)
@@ -392,7 +395,7 @@ internal static class MergedIndexTests
             }
         }
 
-        using var reopened = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged });
+        using var reopened = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged });
         Check.True(reopened.FileExists(Root + "/a/body.bin"));
     }
 
@@ -415,9 +418,9 @@ internal static class MergedIndexTests
 
         )
         {
-            using var packages = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = mode });
+            using var packages = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = mode });
             Check.True(packages.FileExists(path));
-            Check.Equal(new AssetInfo(path, 3, false), packages.GetFileInfo(path));
+            Check.Equal(new AssetEntryInfo(path, AssetEntryKind.File, 3, false), packages.GetFileInfo(path));
             Check.True(packages.DirectoryExists(prefix));
             Check.True(packages.EnumerateDirectories("", false).SequenceEqual(["d"]));
             Check.Equal(0, packages.EnumerateDirectories(prefix).Count());
@@ -450,7 +453,7 @@ internal static class MergedIndexTests
         }
 
         await fixture.Build();
-        using var packages = PackageSet.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, ReadMode = AssetReadMode.MemoryMapped });
+        using var packages = QuireBundle.Open(fixture.Output, new ReadOptions { IndexMode = AssetIndexMode.Merged, ReadMode = AssetReadMode.MemoryMapped });
         const string first = Root + "/group0/item00.bin";
         Parallel.For(0, 128, index =>
         {
@@ -536,12 +539,12 @@ internal static class MergedIndexTests
             PageCacheBytes = 0,
             MetadataCacheBytes = 0
         };
-        using var perPackage = PackageSet.Open(fixture.Output, options with
+        using var perPackage = QuireBundle.Open(fixture.Output, options with
         {
             IndexMode = AssetIndexMode.PerPackage,
             Progress = perPackageProgress
         });
-        using var merged = PackageSet.Open(fixture.Output, options with
+        using var merged = QuireBundle.Open(fixture.Output, options with
         {
             IndexMode = AssetIndexMode.Merged,
             Progress = mergedProgress
@@ -569,7 +572,7 @@ internal static class MergedIndexTests
     }
 
     ];
-    private static string[] Directories(IEnumerable<AssetInfo> files, string directory, bool recursive)
+    private static string[] Directories(IEnumerable<AssetEntryInfo> files, string directory, bool recursive)
     {
         string prefix = directory.Length == 0 ? "" : directory + "/";
         var found = new HashSet<string>(StringComparer.Ordinal);
@@ -596,7 +599,7 @@ internal static class MergedIndexTests
         return found.OrderBy(path => path + "/", AssetPath.Comparer).ToArray();
     }
 
-    private static void AssertPerPackageDiagnostics(PackageSet packages)
+    private static void AssertPerPackageDiagnostics(QuireBundle packages)
     {
         Check.True(!packages.IndexInfo.IsMerged);
         Check.Equal(0L, packages.IndexInfo.MemoryBytes);
@@ -604,7 +607,7 @@ internal static class MergedIndexTests
         Check.Equal<int?>(null, packages.IndexInfo.DirectoryCount);
     }
 
-    private static void AssertEmptyMerged(PackageSet packages)
+    private static void AssertEmptyMerged(QuireBundle packages)
     {
         Check.True(packages.IndexInfo.IsMerged);
         Check.Equal(40L, packages.IndexInfo.MemoryBytes);

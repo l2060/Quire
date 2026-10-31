@@ -1,13 +1,46 @@
 # 读取后端验证
 
-使用标准库的可复现控制台基准，无 BenchmarkDotNet 或其他 NuGet 依赖。从 Quire 仓库根目录运行：
+使用标准库的可复现控制台基准，无 BenchmarkDotNet 测量框架；资源运行库的密码学依赖与正式版本相同。从 Quire 仓库根目录运行：
 
 ```powershell
 $env:DOTNET_TieredCompilation = '0'
-dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- benchmarks/results/read-backends.json
+dotnet run --project benchmarks/Quire.Benchmarks.csproj -c Release -- benchmarks/results/read-backends.json
 ```
 
 结果保存到指定 JSON；源文件和临时包在系统临时目录创建，完成后清理。计时包括路径解析、流/结果生命周期、实际读取、必要的解压解密；完整内容读取还包括 SHA-256 及 Meta。数值 Meta getter 微基准单独记录，不混同为资源加载吞吐。
+
+基准生成的 YAML 使用 `compression: none` 或 `compression: lz4`；LZ4 使用 `compression-policy: adaptive`，仅保留压缩后更小的块。当前基准和历史结果未覆盖 `zlib` 或 `always` 策略，不能用于比较它们的吞吐或分配。
+
+## 百万文件构建索引
+
+```powershell
+dotnet run --project benchmarks/Quire.Benchmarks.csproj -c Release -- --build-state benchmarks/results/build-state.json
+```
+
+该模式只生成合成索引记录，不创建百万个源文件。固定数据集包含 1,000,000 条记录、8 个包、3 种编码策略、约 1% Meta，以及空文件、小文件和超过 4 GiB 的逻辑长度。初次完整候选提交后，再生成包含 3,000 条新增、4,000 条修改、3,000 条删除的候选；验证候选不改变正式基线，提交后应用冻结状态并清理 pending。
+
+对照实现固定在 [LegacyTagStore.cs](LegacyTagStore.cs)，使用此前 `ASTAG002` 全量快照和独立 `tag.json`；它只参与性能比较，不为产品提供旧格式兼容。新实现测量 `LoadBaseline` 的完整读取，另记录一万条变更的轻量历史与详细 pending 大小、解析时间，以及仅读取 Tag 头和提交 ID 列表的历史查询。报告中的写入和提交耗时是单次观测，不能据此推断稳定吞吐。
+
+完整读取各预热 2 次，再交替测量 5 次；每次先执行完整 GC，记录同步调用线程的分配量，所有恢复字段在计时结束后逐一核对。历史查询每轮取 100 次调用的平均值。测试还使用只有有效头部、资源区域清零的文件副本，确认历史查询无需解析全量状态。结果包含原始样本、运行环境、CLI 和基准程序集 SHA-256。临时索引完成后清理，JSON 保留；这是热系统缓存测量，不代表冷盘或资源内容的打包吞吐。
+
+2026-10-31，Windows x64、.NET 10.0.14，完整样本见 [build-state.json](results/build-state.json)。百万记录读取中位数与分配如下；新格式的完整读取包含基线 SHA-256 校验。
+
+| 完整状态读取 | 中位耗时 | 调用线程分配 |
+| --- | ---: | ---: |
+| 旧 ASTAG002 快照 | 361.41 ms | 285,939,248 B |
+| 新 baseline.idx | 342.93 ms | 285,930,624 B |
+
+此数据集新基线读取快约 5.1%，分配基本相同。单份完整基线仍为 52.78 MiB；节省来自历史只保存变化，不来自牺牲完整文件摘要或让每次加载重放历史。
+
+| 保存内容 | 大小 |
+| --- | ---: |
+| 首次百万条新增的轻量历史 | 14.33 MiB |
+| 一万条变更的轻量历史 | 144.24 KiB |
+| 该候选待提交的详细状态 | 420.02 KiB |
+| 两次提交后：唯一基线 + 两份历史 | 67.25 MiB |
+| 旧格式：两份完整快照及 tag.json | 105.56 MiB |
+
+候选详情提交后删除；上述两次提交的保留空间减少 36.29%。一万条历史读取中位 1.134 ms、分配 1,702,904 B；详细状态读取 1.576 ms、分配 2,239,720 B。两份 Tag 的头部及提交列表查询平均每次中位 0.198 ms、分配 24,788 B，与百万资源表解析无关。单次观测中，该候选索引写入 18.31 ms；提交仍需加载并重写完整基线，用时 1.28 s、分配约 284.15 MiB。这是明确的提交成本，并不随候选文件数降为常数。
 
 ## 枚举与读取热路径（合并索引前的历史测量）
 
@@ -15,7 +48,7 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- be
 
 ```powershell
 $env:DOTNET_TieredCompilation = '0'
-dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --hot-paths benchmarks/results/hot-paths-after.json
+dotnet run --project benchmarks/Quire.Benchmarks.csproj -c Release -- --hot-paths benchmarks/results/hot-paths-after.json
 ```
 
 该模式生成 2,048 个 4 KiB 文件、129 个隐式目录，以及包含 32 条 metadata-only 覆盖的第二个包。分别测量原始、LZ4、AES-GCM、LZ4+AES-GCM 数据在 RandomAccess 和 MemoryMapped 后端的三轮同步读取。随机内容使用固定种子；文件一半可压缩、一半随机。
@@ -39,9 +72,9 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --
 
 普通 `foreach` 的枚举分配主要是结果路径字符串：本次完整枚举减少 78.0%，目录递归枚举减少 98.5%，直接文件枚举减少 99.2%。新增目录 API 每次枚举全部 129 个目录分配 6,272 B，枚举 `data` 下 64 个直接目录分配 2,656 B。复用 `AssetReader` 的 256 B 范围读取在所有四种数据组合及两种后端均测得 0 B/次；这个结论限定于已预热的读取器和块缓存。
 
-各场景并非全部加速：未压缩、未加密的 RandomAccess `ReadAt` 5,000 次在本轮从 24.262 ms 变为 35.904 ms，同时分配从 528 B/次降到 0。此项仍包含实际操作系统读取，当前数据不足以区分系统波动与代码差异，因此不据此宣称所有后端吞吐都提升。压缩/加密的单次 `PackageSet.ReadAt` 仍创建读取器，分配为 232 B/次；需要连续随机读取时可复用 `OpenRead` 返回的 `AssetReader`。
+各场景并非全部加速：未压缩、未加密的 RandomAccess `ReadAt` 5,000 次在本轮从 24.262 ms 变为 35.904 ms，同时分配从 528 B/次降到 0。此项仍包含实际操作系统读取，当前数据不足以区分系统波动与代码差异，因此不据此宣称所有后端吞吐都提升。压缩/加密的单次 `QuireBundle.ReadAt` 仍创建读取器，分配为 232 B/次；需要连续随机读取时可复用 `OpenRead` 返回的 `AssetReader`。
 
-该历史版本中，热缓存、同步单线程的 5,000 次 4 KiB `PackageSet.ReadAt`，MemoryMapped 在四种编码组合下均较快：
+该历史版本中，热缓存、同步单线程的 5,000 次 4 KiB `QuireBundle.ReadAt`，MemoryMapped 在四种编码组合下均较快：
 
 | 数据编码 | RandomAccess | MemoryMapped | MemoryMapped 加速比 |
 |---|---:|---:|---:|
@@ -58,7 +91,7 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --
 
 ```powershell
 $env:DOTNET_TieredCompilation = '0'
-dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --merged-index benchmarks/results/merged-index.json
+dotnet run --project benchmarks/Quire.Benchmarks.csproj -c Release -- --merged-index benchmarks/results/merged-index.json
 ```
 
 此基准通过友元访问内部的 `IndexMode = AssetIndexMode.PerPackage` 和 `AssetIndexMode.Merged` 做强制对照；这些不是公开配置选项。公开 API 自动构建合并索引，预算不足时回退，用户可用 `MaxMergedIndexBytes` 调整预算，并通过 `IndexInfo.IsMerged` 查看实际是否使用合并索引。两种内部策略读取同一组 8 个包：基包含 8,192 个 128 B 文件，后续 7 个补丁各包含 128 条内容覆盖和 128 条 metadata-only 覆盖，其中一半的路径在每层重复覆盖。最终可见文件数仍为 8,192，目录数为 513，不含根目录。
@@ -99,10 +132,10 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --
 ## 索引表示的内存探针（实现前的设计估算）
 
 ```powershell
-dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --index-memory benchmarks/results/index-memory.json
+dotnet run --project benchmarks/Quire.Benchmarks.csproj -c Release -- --index-memory benchmarks/results/index-memory.json
 ```
 
-这份历史报告来自合并索引实现前的独立表示探针，其 `MergedRow` 和目录节点类型是用于比较字段布局的假设模型，不是实际 PackageSet 索引的完整内存测量。使用 100,000 项、48 字符 ASCII 路径，预分配字典，记录三轮中最小的当前线程托管分配量；它不测查询速度、存活堆、进程工作集或索引构建峰值。代码见 [IndexMemoryProbe.cs](IndexMemoryProbe.cs)，历史原始结果保留于 [index-memory.json](results/index-memory.json)。
+这份历史报告来自合并索引实现前的独立表示探针，其 `MergedRow` 和目录节点类型是用于比较字段布局的假设模型，不是实际 QuireBundle 索引的完整内存测量。使用 100,000 项、48 字符 ASCII 路径，预分配字典，记录三轮中最小的当前线程托管分配量；它不测查询速度、存活堆、进程工作集或索引构建峰值。代码见 [IndexMemoryProbe.cs](IndexMemoryProbe.cs)，历史原始结果保留于 [index-memory.json](results/index-memory.json)。
 
 当前实现的核心数组为每文件 28 B（24 B 文件引用加 4 B 邻接编号）、每目录 40 B，另含一个根目录节点；该成本叠加在已有包索引之上。实际运行库的预算、打开成本和性能测量见上节 [合并索引与逐包索引](#合并索引与逐包索引) 及 [merged-index.json](results/merged-index.json)。
 
@@ -120,13 +153,13 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --
 
 当前 `EntryRecord` 值类型在此运行时占 104 字节，包含两条记录及两个包引用的解析值占 224 字节。这是解码后的值类型大小；当前常驻包索引保留的是原始编码字节，仍按每条 **128 字节记录＋UTF-8 路径**计算。
 
-本次字典容量为 108,631，实际开销受容量、装载率、运行时、路径长度和 Unicode 内容影响。若字典自行持有新路径字符串，需在字典行数据上再加字符串开销。紧凑结构数组与已有索引是叠加关系；快速查询若依赖分页路径仍可能需要 I/O。统一索引设计的内存范围与适用场景见 [README](../README.md#现有索引与统一索引的内存取舍)。
+本次字典容量为 108,631，实际开销受容量、装载率、运行时、路径长度和 Unicode 内容影响。若字典自行持有新路径字符串，需在字典行数据上再加字符串开销。紧凑结构数组与已有索引是叠加关系；快速查询若依赖分页路径仍可能需要 I/O。统一索引的预算与自动回退规则见 [ReadOptions](../Quire/ReadOptions.cs)。
 
 ## 数据与测量边界
 
 2026-10-26，i7-13700KF（24逻辑处理器）、Windows 10.0.28000、.NET 10.0.12，Release，关闭分层编译。
 
-以下原始数据和程序集哈希来自更名前的版本；项目重命名后保留测量记录，复测命令使用当前 Quire.Package 项目名。
+以下原始数据和程序集哈希来自更名前的版本；项目重命名后保留测量记录，复测命令使用当前 Quire 项目名。
 
 - 3000个小资源：80%为1KiB、15%为4KiB、5%为64KiB；一半随机、一半可压缩数据，各有四字段Meta。
 - 一个16MiB随机数据资源，用于大资源局部和顺序读取。
@@ -165,3 +198,20 @@ dotnet run --project benchmarks/Quire.Package.Benchmarks.csproj -c Release -- --
 原始数据包含全部轮次、P95/P99、CPU、分配量、工作集及程序集摘要：[read-backends.json](results/read-backends.json)。测量程序集 SHA-256：`AC6D331B70EC0AB3657A54AAF90BF27C88C7B718E900F978E346B04C68267ED6`。工作集包含测试程序和运行时；同进程首次打开时间包含初始化因素，不作为冷启动结论。
 
 冷盘、多盘型和生产资源集的收益仍需在目标环境测量。对于映射模式，还需考虑页错误在调用线程上发生，异步接口不能消除该等待。
+
+## 原生目录数组查询
+
+运行 `dotnet run -c Release --project benchmarks -- --dir`。2026-10-30 在 Windows x64、.NET 10.0.14 上测量 904 个文件、两个包的直接子项查询；`AssetEntryInfo` 实测为 24 字节，不含其引用的路径字符串。原始 252 条测量、环境和程序集摘要见 [dir.json](results/dir.json)。
+
+下表为常驻索引三轮、每轮 30 次查询的耗时中位数；两边都获取并消费完整 `AssetEntryInfo[]`。基线使用 `EnumerateDirectories` + `EnumerateFiles` 填入 `List<AssetEntryInfo>` 后 `ToArray`，不额外排序。分配包含结果数组、路径字符串及遍历状态。
+
+| 索引 / 直接子项 | 基线 μs/次 | Dir μs/次 | 基线 B/次 | Dir B/次 |
+| --- | ---: | ---: | ---: | ---: |
+| 合并 / 256 文件 | 29.03 | 28.85 | 35,168 | 22,688 |
+| 合并 / 128 目录 | 14.15 | 13.79 | 17,736 | 11,424 |
+| 逐包 / 256 文件 | 145.83 | 65.95 | 35,168 | 22,688 |
+| 逐包 / 128 目录 | 175.02 | 63.38 | 17,736 | 11,424 |
+
+合并索引在这组完整查询中的主要收益是减少约 35% 的分配，文件密集场景的耗时基本相当；逐包模式还减少了重复查找与归并。`DirAsync` 用于异步读取所需索引页，不保证比同步接口更快。常驻合并索引的 256 文件查询中，`DirAsync` 为 30.36 μs/次，分配同为 22,688 B/次。
+
+报告还分别记录流式消费、热分页和关闭应用页缓存的场景，数组与流式数据应分开比较。关闭应用页缓存并未清空操作系统缓存；分页异步涉及的线程切换以进程总分配计量，因此可能包含背景噪声。测量不包含打开包、构建索引和 UI 绑定，不能作为冷盘或任意数据集的速度保证。

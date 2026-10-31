@@ -1,5 +1,5 @@
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 internal static class EnumerationTests
 {
@@ -39,16 +39,16 @@ internal static class EnumerationTests
 
             )
             {
-                using var set = PackageSet.Open(fixture.Output, options);
+                using var set = QuireBundle.Open(fixture.Output, options);
                 var all = set.EnumerateFiles().ToArray();
-                Check.Equal(paths.Length + 2, all.Length);
+                Check.Equal(paths.Length + 1, all.Length);
                 Check.True(all.Select(info => info.Path).SequenceEqual(all.Select(info => info.Path).Order(AssetPath.Comparer)));
                 foreach (var info in all)
                 {
                     Check.Equal(set.GetFileInfo(info.Path), info);
                 }
 
-                Check.True(set.FileExists("common/data/collision"));
+                Check.True(!set.FileExists("common/data/collision"));
                 Check.True(set.DirectoryExists("common/data/collision"));
                 Check.Equal(2L, set.ReadMetadata("common/data/a/direct.bin").GetInt64("revision"));
                 Check.Equal(2L, set.GetFileInfo("common/data/a/deep/two.bin").Length);
@@ -110,7 +110,7 @@ internal static class EnumerationTests
                 Check.True(set.EnumerateFiles().SequenceEqual(set.EnumerateFiles("", true)));
             }
 
-            using var patchOnly = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId));
+            using var patchOnly = QuireBundle.Open(Path.Combine(fixture.Output, patch.TagId));
             Check.True(!patchOnly.FileExists("common/data/a/direct.bin"));
             Check.True(patchOnly.EnumerateFiles().All(info => info.Path != "common/data/a/direct.bin"));
             Check.Equal(0, patchOnly.EnumerateDirectories("common/data/a/deep").Count());
@@ -123,7 +123,7 @@ internal static class EnumerationTests
             var baseline = await fixture.Build();
             fixture.Text("orphan/deep/item.meta", "version=2");
             var patch = await fixture.Build(baseline.TagId);
-            using var set = PackageSet.Open(Path.Combine(fixture.Output, patch.TagId));
+            using var set = QuireBundle.Open(Path.Combine(fixture.Output, patch.TagId));
             Check.Equal(0, set.EnumerateFiles().Count());
             Check.Equal(0, set.EnumerateDirectories("", true).Count());
             Check.True(!set.DirectoryExists("common"));
@@ -139,7 +139,7 @@ internal static class EnumerationTests
             }
 
             await fixture.Build();
-            using var set = PackageSet.Open(fixture.Output);
+            using var set = QuireBundle.Open(fixture.Output);
             var files = set.EnumerateFiles();
             var directories = set.EnumerateDirectories("common/data", false);
             for (int i = 0; i < 20; i++)
@@ -206,7 +206,7 @@ internal static class EnumerationTests
         {
             using var fixture = new Fixture(false);
             Directory.CreateDirectory(fixture.Output);
-            using var set = PackageSet.Open(fixture.Output);
+            using var set = QuireBundle.Open(fixture.Output);
             Check.Equal(0, set.EnumerateFiles().Count());
             Check.Equal(0, set.EnumerateDirectories().Count());
             Check.True(set.DirectoryExists(""));

@@ -1,11 +1,7 @@
-using System;
 using System.Buffers;
 using System.Security.Cryptography;
-using System.Threading;
-using System.Threading.Tasks;
-using Quire.Package;
 
-namespace Quire.Package.Examples
+namespace Quire.Examples
 {
     internal static class LargeFileExample
     {
@@ -16,21 +12,21 @@ namespace Quire.Package.Examples
         {
             if (arguments.Length < 3 || arguments.Length > 4)
             {
-                Console.Error.WriteLine("Usage: Quire.Package.Examples --large-file PACKAGE_DIRECTORY ASSET_PATH [PASSWORD]");
+                Console.Error.WriteLine("Usage: Quire.Examples --large-file PACKAGE_DIRECTORY ASSET_PATH [CLIENT_KEY_FILE]");
                 return 1;
             }
 
             string packageDirectory = arguments[1];
             string assetPath = arguments[2];
-            string? password = null;
+            AssetKey? key = null;
             if (arguments.Length == 4)
             {
-                password = arguments[3];
+                key = new AssetKey(File.ReadAllBytes(arguments[3]));
             }
 
             ReadOptions readOptions = new ReadOptions
             {
-                Password = password,
+                Key = key,
                 ReadMode = AssetReadMode.RandomAccess,
                 // 此入口只使用流式读取，大文件无需提高完整读取的内存上限。
                 MaxBufferedAssetBytes = 0
@@ -48,9 +44,9 @@ namespace Quire.Package.Examples
                 try
                 {
                     CancellationToken cancellationToken = cancellationSource.Token;
-                    using (PackageSet packageSet = await PackageSet.OpenAsync(packageDirectory, readOptions, cancellationToken))
+                    using (QuireBundle bundle = await QuireBundle.OpenAsync(packageDirectory, readOptions, cancellationToken))
                     {
-                        if (!packageSet.FileExists(assetPath))
+                        if (!bundle.FileExists(assetPath))
                         {
                             Console.Error.WriteLine($"Asset not found: {assetPath}");
                             return 1;
@@ -71,7 +67,7 @@ namespace Quire.Package.Examples
                                 };
 
                             long totalBytesRead = await ReadFileInChunksAsync(
-                                packageSet,
+                                bundle,
                                 assetPath,
                                 consumeChunkAsync,
                                 DefaultBufferSize,
@@ -104,18 +100,18 @@ namespace Quire.Package.Examples
         /// 分块读取不比较包内保存的整文件摘要；本示例的摘要供调用者使用。
         /// </remarks>
         internal static async Task<long> ReadFileInChunksAsync(
-            PackageSet packageSet,
+            QuireBundle bundle,
             string assetPath,
             Func<ReadOnlyMemory<byte>, CancellationToken, ValueTask> consumeChunkAsync,
             int bufferSize,
             CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(packageSet);
+            ArgumentNullException.ThrowIfNull(bundle);
             ArgumentNullException.ThrowIfNull(consumeChunkAsync);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bufferSize);
             cancellationToken.ThrowIfCancellationRequested();
 
-            using (AssetReader assetReader = packageSet.OpenRead(assetPath))
+            using (AssetReader assetReader = bundle.OpenRead(assetPath))
             {
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
                 try

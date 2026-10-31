@@ -1,0 +1,206 @@
+{
+  "timestampUtc": "2026-10-31T02:10:09.9658606+00:00",
+  "runtime": ".NET 10.0.14",
+  "os": "Microsoft Windows 10.0.28000",
+  "architecture": "X64",
+  "processorCount": 24,
+  "cliSha256": "FF707A3DB5346556202B7BAB3078AE5D5CC5AD9A6AEB84027E7C8F95B20A14C1",
+  "benchmarkSha256": "6FD1C60B1E3FAA101658A3DA93D52D6468082E428498E7FE4DC7106CEA76812B",
+  "filesPerBaseline": 1000000,
+  "metadataFilesInitially": 9901,
+  "packageCount": 8,
+  "candidate": {
+    "added": 3000,
+    "updated": 4000,
+    "removed": 3000
+  },
+  "sizes": {
+    "legacyInitialIndexBytes": 55346732,
+    "legacyChangedIndexBytes": 55343985,
+    "legacyMetadataBytes": 560,
+    "baselineBytes": 55346804,
+    "firstHistoryBytes": 15028570,
+    "candidateHistoryBytes": 147709,
+    "candidatePendingBytes": 430107,
+    "candidateTotalBytes": 577816,
+    "committedBaselineBytes": 55344061,
+    "retainedHistoryBytes": 15176279,
+    "retainedAfterTwoCommitsBytes": 70520340,
+    "legacyTwoSnapshotsBytes": 110691277,
+    "retainedReductionPercent": 36.290968980328955
+  },
+  "condition": "Release synchronous loads, warm OS cache, 2 warmups and 5 alternating full-read rounds. Full GC before each sample; current-thread allocations. All restored fields verified after timing. Header samples average 100 queries per sample. No cold-disk or asset-payload throughput claims.",
+  "legacyFullRead": {
+    "medianMs": 581.8529,
+    "minMs": 572.374,
+    "maxMs": 589.1003,
+    "allocatedBytes": 285939312,
+    "samples": [
+      {
+        "ElapsedMs": 585.9035,
+        "AllocatedBytes": 285939312
+      },
+      {
+        "ElapsedMs": 589.1003,
+        "AllocatedBytes": 285939312
+      },
+      {
+        "ElapsedMs": 578.4661,
+        "AllocatedBytes": 285939312
+      },
+      {
+        "ElapsedMs": 572.374,
+        "AllocatedBytes": 285939312
+      },
+      {
+        "ElapsedMs": 581.8529,
+        "AllocatedBytes": 285939312
+      }
+    ]
+  },
+  "baselineFullRead": {
+    "medianMs": 583.8461,
+    "minMs": 575.2137,
+    "maxMs": 593.7398,
+    "allocatedBytes": 285930688,
+    "samples": [
+      {
+        "ElapsedMs": 591.3663,
+        "AllocatedBytes": 285930688
+      },
+      {
+        "ElapsedMs": 593.7398,
+        "AllocatedBytes": 285930688
+      },
+      {
+        "ElapsedMs": 583.8461,
+        "AllocatedBytes": 285930688
+      },
+      {
+        "ElapsedMs": 575.2137,
+        "AllocatedBytes": 285930688
+      },
+      {
+        "ElapsedMs": 576.9751,
+        "AllocatedBytes": 285930688
+      }
+    ]
+  },
+  "candidateDeltaRead": {
+    "medianMs": 2.6086,
+    "minMs": 2.3668,
+    "maxMs": 2.8918,
+    "allocatedBytes": 2239728,
+    "samples": [
+      {
+        "ElapsedMs": 2.3668,
+        "AllocatedBytes": 2239728
+      },
+      {
+        "ElapsedMs": 2.5644,
+        "AllocatedBytes": 2239728
+      },
+      {
+        "ElapsedMs": 2.8918,
+        "AllocatedBytes": 2239728
+      },
+      {
+        "ElapsedMs": 2.6086,
+        "AllocatedBytes": 2239728
+      },
+      {
+        "ElapsedMs": 2.6373,
+        "AllocatedBytes": 2239728
+      }
+    ]
+  },
+  "candidateHistoryRead": {
+    "medianMs": 1.9346,
+    "minMs": 1.7822,
+    "maxMs": 2.202,
+    "allocatedBytes": 1702912,
+    "samples": [
+      {
+        "ElapsedMs": 1.9524,
+        "AllocatedBytes": 1702912
+      },
+      {
+        "ElapsedMs": 1.7822,
+        "AllocatedBytes": 1702912
+      },
+      {
+        "ElapsedMs": 1.8793,
+        "AllocatedBytes": 1702912
+      },
+      {
+        "ElapsedMs": 1.9346,
+        "AllocatedBytes": 1702912
+      },
+      {
+        "ElapsedMs": 2.202,
+        "AllocatedBytes": 1702912
+      }
+    ]
+  },
+  "twoTagHeaderQuery": {
+    "medianMs": 0.514904,
+    "minMs": 0.49089799999999995,
+    "maxMs": 0.531182,
+    "allocatedBytes": 24788,
+    "samples": [
+      {
+        "ElapsedMs": 0.531182,
+        "AllocatedBytes": 24788
+      },
+      {
+        "ElapsedMs": 0.519038,
+        "AllocatedBytes": 24788
+      },
+      {
+        "ElapsedMs": 0.514904,
+        "AllocatedBytes": 24788
+      },
+      {
+        "ElapsedMs": 0.504115,
+        "AllocatedBytes": 24747
+      },
+      {
+        "ElapsedMs": 0.49089799999999995,
+        "AllocatedBytes": 24724
+      }
+    ]
+  },
+  "writes": [
+    {
+      "name": "current:initial_candidate",
+      "elapsedMs": 4328.1245,
+      "allocatedBytes": 58087512
+    },
+    {
+      "name": "current:initial_commit",
+      "elapsedMs": 3287.1152,
+      "allocatedBytes": 571079248
+    },
+    {
+      "name": "current:10k_candidate",
+      "elapsedMs": 36.8165,
+      "allocatedBytes": 685456
+    },
+    {
+      "name": "legacy:initial_snapshot",
+      "elapsedMs": 1856.6318,
+      "allocatedBytes": 40148440
+    },
+    {
+      "name": "legacy:changed_snapshot",
+      "elapsedMs": 1725.0833,
+      "allocatedBytes": 25296888
+    },
+    {
+      "name": "current:10k_commit",
+      "elapsedMs": 2267.4141,
+      "allocatedBytes": 298321544
+    }
+  ],
+  "correctness": "Every field round-trips; candidate leaves baseline bytes and timestamp unchanged; commit applies the frozen delta and removes pending; history survives commit; individual Tag headers load while baseline/pending are exclusively locked; history listing and committed-ID lookup succeed on copies whose resource bodies are zeroed."
+}

@@ -1,11 +1,12 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using Quire.Cli;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
 using Quire.Cli.Sources;
 using Quire.Cli.Tags;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 internal static class Suite
 {
@@ -19,11 +20,30 @@ internal static class Suite
             return Task.CompletedTask;
         });
         CliTests.Register(Test);
+        CliFailureTests.Register(Test);
+        CliProgressProtocolTests.Register(Test);
+        BuildLockTests.Register(Test);
+        ConfigurationTests.Register(Test);
+        ProjectScopeTests.Register(Test);
+        ConfigurationSwitchTests.Register(Test);
+        PackageNameTests.Register(Test);
+        OutputPathTests.Register(Test);
+        CompressionTests.Register(Test);
+        TagIndexTests.Register(Test);
+        WorkflowTests.Register(Test);
+        SourcePatternTests.Register(Test);
+        SourceRootTests.Register(Test);
         ProgressTests.Register(Test);
         EnumerationTests.Register(Test);
+        DirTests.Register(Test);
+        DeletionTests.Register(Test);
         EnumerationMergeTests.Register(Test);
         MergedIndexTests.Register(Test);
         ReaderTests.Register(Test);
+        ReadIntegrityTests.Register(Test);
+        PackageChainTests.Register(Test);
+        SignedPackageTests.Register(Test);
+        NativeCryptoTests.Register(Test);
         Sync("all eight metadata types and deterministic property encoding", () =>
         {
             var m = new Metadata(PropertyMetadata.Parse("name=hero\ni=-9223372036854775808\nd=1.25\nb=true\ns=[\"a\",\"中\"]\nints=[1,2]\nds=[0.5,2.0]\nbs=[true,false]\nempty:int64[]=[]\ncode:string=001\nurl=a=b#c"));
@@ -63,7 +83,7 @@ internal static class Suite
             using var f = new Fixture();
             f.Put("a.bin", [1, 2, 3]);
             var p = f.Config();
-            Check.Equal(Path.Combine(f.Root, ".quire"), p.StateDirectory);
+            Check.Equal(Path.Combine(f.Root, ".quire", "test-project"), p.StateDirectory);
             Check.Equal(f.Input, p.Packages[0].Sources[0].Directory);
             Check.Equal("common/data/a.bin", (await SourceScanner.ScanAsync(p, 4, default)).Single().Path);
             Check.Throws<InvalidDataException>(() => ProjectYaml.Parse("a: 1\na: 2"));
@@ -86,10 +106,11 @@ internal static class Suite
             f.Text(".assetignore", "*.tmp\n!keep.tmp\norphan.bin*\n");
             Check.Equal(2, (await SourceScanner.ScanAsync(f.Config(), 4, default)).Length);
         });
-        foreach (bool compression in new[]
+        foreach (var compression in new[]
         {
-            false,
-            true
+            CompressionAlgorithm.None,
+            CompressionAlgorithm.Lz4,
+            CompressionAlgorithm.Zlib
         }
 
         )
@@ -101,7 +122,8 @@ internal static class Suite
 
             )
             {
-                bool c = compression, e = encryption;
+                var c = compression;
+                bool e = encryption;
                 Test($"full build/read compression={c} encryption={e}", async () =>
                 {
                     using var f = new Fixture(c, e);
@@ -115,14 +137,16 @@ internal static class Suite
                     var tag = await f.Build();
                     Check.Equal(2, tag.ContentChanges);
                     Check.Equal(1, tag.Outputs.Length);
-                    using var set = await PackageSet.OpenAsync(f.Output, f.ReadOptions);
+                    using var set = await QuireBundle.OpenAsync(f.Output, f.ReadOptions);
                     Check.Equal(tag.TagId, set.Packages.Single().TagId);
                     Check.Equal(2, set.EnumerateFiles().Count());
                     using var data = await set.ReadAsync("common/data/body.bin");
+                    Check.Equal(new AssetEntryInfo("common/data/body.bin", AssetEntryKind.File, expected.Length, true), data.Info);
                     Check.Bytes(expected, data.Data.Span);
                     Check.Equal(-16L, data.Metadata.GetInt64("offset"));
                     Check.True(set.GetFileInfo("common/data/empty.bin").HasMetadata);
                     using var empty = set.Read("common/data/empty.bin");
+                    Check.Equal(new AssetEntryInfo("common/data/empty.bin", AssetEntryKind.File, 0, true), empty.Info);
                     Check.Equal(0, empty.Data.Length);
                     byte[] range = new byte[5000];
                     Check.Equal(range.Length, await set.ReadAtAsync("common/data/body.bin", 262140, range));
@@ -131,7 +155,7 @@ internal static class Suite
                     stream.Seek(-17, SeekOrigin.End);
                     Check.Equal((int)expected[^17], stream.ReadByte());
                     await set.VerifyAsync();
-                    using var paged = PackageSet.Open(f.Output, f.ReadOptions with
+                    using var paged = QuireBundle.Open(f.Output, f.ReadOptions with
                     {
                         MaxResidentIndexBytes = 0,
                         PageCacheBytes = 0,
@@ -144,12 +168,12 @@ internal static class Suite
                     Check.True(disk.AsSpan(0, (int)h.DataOffset).IndexOf("common/data/body.bin"u8) < 0);
                     Check.True(disk.AsSpan(0, (int)h.DataOffset).IndexOf("unique-secret-metadata"u8) < 0);
                     if (e)
-                        Check.Throws<InvalidDataException>(() => PackageSet.Open(f.Output, new ReadOptions { Password = "incorrect" }));
+                        Check.Throws<InvalidDataException>(() => QuireBundle.Open(f.Output, new ReadOptions { Key = TestKeys.OtherClient }));
                     Check.Equal(0, Directory.GetFiles(f.Output, "*.tmp", SearchOption.AllDirectories).Length);
                 });
             }
 
-        Test("metadata-only overlay, no deletion, full replacement resets metadata", async () =>
+        Test("metadata-only overlay, logical deletion, full replacement resets metadata", async () =>
         {
             using var f = new Fixture();
             f.Put("a", [1, 2]);
@@ -160,13 +184,13 @@ internal static class Suite
             var b = await f.Build(a.TagId);
             Check.Equal(0, b.ContentChanges);
             Check.Equal(1, b.MetadataChanges);
-            using (var only = PackageSet.Open(Path.Combine(f.Output, b.TagId)))
+            using (var only = QuireBundle.Open(Path.Combine(f.Output, b.TagId)))
             {
                 Check.True(!only.FileExists("common/data/a"));
                 only.Verify();
             }
 
-            using (var all = PackageSet.Open(f.Output))
+            using (var all = QuireBundle.Open(f.Output))
             {
                 using var r = all.Read("common/data/a");
                 Check.Bytes([1, 2], r.Data.Span);
@@ -176,18 +200,20 @@ internal static class Suite
 
             File.Delete(Path.Combine(f.Input, "a.meta"));
             File.Delete(Path.Combine(f.Input, "gone"));
-            var noDelete = await f.Build(b.TagId);
-            Check.Equal(0, noDelete.Outputs.Length);
-            using (var all = PackageSet.Open(f.Output))
+            var deletion = await f.Build(b.TagId);
+            Check.Equal(1, deletion.Outputs.Length);
+            Check.Equal(1, deletion.DeletedChanges);
+            using (var all = QuireBundle.Open(f.Output))
             {
-                Check.True(all.FileExists("common/data/gone"));
+                Check.True(!all.FileExists("common/data/gone"));
                 Check.Equal(2L, all.ReadMetadata("common/data/a").GetInt64("x"));
             }
 
-            Check.Equal(2, TagStore.LoadFiles(f.Config().StateDirectory, noDelete.TagId).Count);
+            TagStore.Commit(f.Config().StateDirectory, deletion.TagId);
+            Check.Equal(1, TagStore.LoadBaseline(f.Config().StateDirectory).Files.Count);
             f.Put("a", [9]);
-            await f.Build(noDelete.TagId);
-            using var final = PackageSet.Open(f.Output);
+            await f.Build(deletion.TagId);
+            using var final = QuireBundle.Open(f.Output);
             Check.True(!final.GetFileInfo("common/data/a").HasMetadata);
             using var data = final.Read("common/data/a");
             Check.Bytes([9], data.Data.Span);
@@ -202,7 +228,7 @@ internal static class Suite
             string one = Path.Combine(f.Root, a.Outputs[0]), two = Path.Combine(f.Root, b.Outputs[0]);
             File.SetLastWriteTimeUtc(one, DateTime.UtcNow.AddYears(1));
             File.SetLastWriteTimeUtc(two, DateTime.UtcNow.AddYears(-1));
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 using var d = set.Read("common/data/a");
                 Check.Bytes([2], d.Data.Span);
@@ -217,7 +243,7 @@ internal static class Suite
             File.WriteAllText(Path.Combine(dir, ".incomplete.tmp", "bad.asset"), "unfinished");
             Directory.CreateDirectory(Path.Combine(dir, ".quire"));
             File.WriteAllText(Path.Combine(dir, ".quire", "bad.asset"), "internal state");
-            using var tied = PackageSet.Open(dir);
+            using var tied = QuireBundle.Open(dir);
             using var data = tied.Read("common/data/a");
             Check.Bytes([1], data.Data.Span);
         });
@@ -228,7 +254,7 @@ internal static class Suite
                 f.Put($"file{i:D4}", [(byte)i]);
             f.Text("file0000.meta", "text=" + new string('中', 50000));
             await f.Build();
-            using var set = PackageSet.Open(f.Output, new ReadOptions { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
+            using var set = QuireBundle.Open(f.Output, new ReadOptions { MaxResidentIndexBytes = 0, PageCacheBytes = 196608 });
             Check.Equal(550, set.EnumerateFiles().Count());
             Check.Equal(50000, set.ReadMetadata("common/data/file0000").GetString("text").Length);
             using var data = set.Read("common/data/file0549");
@@ -242,7 +268,7 @@ internal static class Suite
             f.Put("a", expected);
             f.Text("a.meta", "n=42");
             await f.Build();
-            var set = await PackageSet.OpenAsync(f.Output, f.ReadOptions);
+            var set = await QuireBundle.OpenAsync(f.Output, f.ReadOptions);
             await Parallel.ForEachAsync(Enumerable.Range(0, 128), new ParallelOptions { MaxDegreeOfParallelism = 8 }, async (i, ct) =>
             {
                 byte[] b = new byte[4096];
@@ -287,7 +313,7 @@ internal static class Suite
             byte[] data = Enumerable.Range(0, 70000).Select(i => (byte)i).ToArray();
             f.Put("a", data);
             await f.Build();
-            using var set = PackageSet.Open(f.Output, new ReadOptions { MaxBufferedAssetBytes = 8, ReadMode = AssetReadMode.MemoryMapped });
+            using var set = QuireBundle.Open(f.Output, new ReadOptions { MaxBufferedAssetBytes = 8, ReadMode = AssetReadMode.MemoryMapped });
             Check.Throws<InvalidOperationException>(() => set.Read("common/data/a"));
             byte[] range = new byte[128];
             await set.ReadAtAsync("common/data/a", 65530, range);
@@ -296,7 +322,7 @@ internal static class Suite
             await set.CopyToAsync("common/data/a", output);
             Check.Bytes(data, output.ToArray());
         });
-        Test("format 2 stores complete eight-character Tags and rejects invalid header fields", async () =>
+        Test("format 6 stores complete eight-character Tags and rejects invalid header fields", async () =>
         {
             foreach (string id in new[] { "00000000", "ffffffff" })
             {
@@ -306,14 +332,15 @@ internal static class Suite
                 var sources = await SourceScanner.ScanAsync(f.Config(), 2, default);
                 Directory.CreateDirectory(f.Output);
                 string file = Path.Combine(f.Output, id + ".asset");
+                using var signing = TestKeys.Create();
                 await PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), id, DateTime.UtcNow.Ticks,
-                    sources.Select(source => new BuildEntry(source, false)).ToArray(), f.ReadOptions.Password, f.BuildOptions, default);
+                    sources.Select(source => new BuildEntry(source, EntryKind.Content)).ToArray(), signing, f.BuildOptions, default);
                 byte[] bytes = File.ReadAllBytes(file);
-                Check.Equal(2, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(8)));
+                Check.Equal(6, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(8)));
                 Check.Equal(id == "00000000" ? 0u : uint.MaxValue, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16)));
-                Check.True(bytes.AsSpan(20, 12).IndexOfAnyExcept((byte)0) < 0);
+                Check.True(bytes.AsSpan(28, 4).IndexOfAnyExcept((byte)0) < 0);
                 Check.Equal(id, PackageHeader.Decode(bytes, bytes.Length).TagId);
-                using (var packages = PackageSet.Open(f.Output, f.ReadOptions))
+                using (var packages = QuireBundle.Open(f.Output, f.ReadOptions))
                 {
                     Check.Equal(id, packages.Packages.Single().TagId);
                     using var asset = packages.Read("common/data/a");
@@ -322,12 +349,19 @@ internal static class Suite
                     packages.Verify();
                 }
 
-                byte[] invalidVersion = bytes.ToArray();
-                BinaryPrimitives.WriteInt32LittleEndian(invalidVersion.AsSpan(8), 1);
-                SHA256.HashData(invalidVersion.AsSpan(0, 160), invalidVersion.AsSpan(160, 32));
-                Check.Throws<InvalidDataException>(() => PackageHeader.Decode(invalidVersion, invalidVersion.Length));
-                bytes[20] = 1;
-                SHA256.HashData(bytes.AsSpan(0, 160), bytes.AsSpan(160, 32));
+                foreach (int version in new[] { 3, 5 })
+                {
+                    byte[] invalidVersion = bytes.ToArray();
+                    BinaryPrimitives.WriteInt32LittleEndian(invalidVersion.AsSpan(8), version);
+                    SHA256.HashData(invalidVersion.AsSpan(0, PackageHeader.ChecksumOffset), invalidVersion.AsSpan(PackageHeader.ChecksumOffset, PackageHeader.ChecksumLength));
+                    Check.Throws<InvalidDataException>(() => PackageHeader.Decode(invalidVersion, invalidVersion.Length));
+                }
+                byte[] oldKeyProfile = bytes.ToArray();
+                BinaryPrimitives.WriteInt32LittleEndian(oldKeyProfile.AsSpan(44), 1);
+                SHA256.HashData(oldKeyProfile.AsSpan(0, PackageHeader.ChecksumOffset), oldKeyProfile.AsSpan(PackageHeader.ChecksumOffset, PackageHeader.ChecksumLength));
+                Check.Throws<InvalidDataException>(() => PackageHeader.Decode(oldKeyProfile, oldKeyProfile.Length));
+                bytes[28] = 1;
+                SHA256.HashData(bytes.AsSpan(0, PackageHeader.ChecksumOffset), bytes.AsSpan(PackageHeader.ChecksumOffset, PackageHeader.ChecksumLength));
                 Check.Throws<InvalidDataException>(() => PackageHeader.Decode(bytes, bytes.Length));
             }
         });
@@ -343,11 +377,11 @@ internal static class Suite
             var damaged = original.ToArray();
             damaged[32] ^= 1;
             File.WriteAllBytes(file, damaged);
-            Check.Throws<InvalidDataException>(() => PackageSet.Open(f.Output));
+            Check.Throws<InvalidDataException>(() => QuireBundle.Open(f.Output));
             damaged = original.ToArray();
             damaged[(int)header.MetadataOffset] ^= 1;
             File.WriteAllBytes(file, damaged);
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 Check.True(set.FileExists("common/data/a"));
                 Check.Throws<CryptographicException>(() => set.ReadMetadata("common/data/a"));
@@ -356,14 +390,14 @@ internal static class Suite
             damaged = original.ToArray();
             damaged[^1] ^= 1;
             File.WriteAllBytes(file, damaged);
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 Check.Throws<InvalidDataException>(() => set.Read("common/data/a"));
                 Check.Throws<InvalidDataException>(() => set.Verify());
             }
 
             File.WriteAllBytes(file, original[..^1]);
-            Check.Throws<InvalidDataException>(() => PackageSet.Open(f.Output));
+            Check.Throws<InvalidDataException>(() => QuireBundle.Open(f.Output));
         });
         Test("changed source fails without publishing", async () =>
         {
@@ -372,11 +406,11 @@ internal static class Suite
             var source = (await SourceScanner.ScanAsync(f.Config(), 2, default)).Single();
             f.Put("a", [7, 8, 9]);
             string file = Path.Combine(f.Root, "failed.asset");
-            await Check.ThrowsAsync<Exception>(() => PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), "1234abcd", DateTime.UtcNow.Ticks, [new BuildEntry(source, false)], null, f.BuildOptions, default));
+            await Check.ThrowsAsync<Exception>(() => PackageWriter.WriteAsync(file, Path.Combine(f.Root, "scratch"), "1234abcd", DateTime.UtcNow.Ticks, [new BuildEntry(source, EntryKind.Content)], null, f.BuildOptions, default));
             Check.True(!File.Exists(file));
             Check.True(!File.Exists(file + ".tmp"));
         });
-        Test("cancellation does not publish Tag; missing baseline rejected", async () =>
+        Test("cancellation does not publish Tag; committing a missing candidate is rejected", async () =>
         {
             using var f = new Fixture();
             f.Put("a", [1]);
@@ -384,28 +418,31 @@ internal static class Suite
             cancel.Cancel();
             await Check.ThrowsAsync<OperationCanceledException>(() => ProjectBuilder.BuildAsync(f.Config(), null, f.BuildOptions, cancel.Token));
             Check.Equal(0, TagStore.List(f.Config().StateDirectory).Count());
-            await Check.ThrowsAsync<FileNotFoundException>(() => f.Build("1234abcd"));
+            await Check.ThrowsAsync<FileNotFoundException>(() => CommandLine.RunAsync(["commit", "missing-candidate", "-f", f.ProjectPath], default));
         });
-        Test("encoding configuration changes rewrite unchanged resources", async () =>
+        Test("encoding configuration changes preserve unchanged resources", async () =>
         {
             using var f = new Fixture(false);
             f.Put("a", new byte[1000]);
             var a = await f.Build();
-            File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("compression: false", "compression: true"));
-            Check.Equal(1, (await f.Build(a.TagId)).ContentChanges);
+            File.WriteAllText(f.ProjectPath, File.ReadAllText(f.ProjectPath).Replace("compression: none", "compression: lz4"));
+            var unchanged = await f.Build(a.TagId);
+            Check.Equal(0, unchanged.ContentChanges);
+            Check.Equal(0, unchanged.Outputs.Length);
         });
-        Sync("zero third-party assembly dependencies and embedded licenses", () =>
+        Sync("framework-only assembly dependencies and embedded LZ4 licenses", () =>
         {
             foreach (var assembly in new[]
             {
-                typeof(PackageSet).Assembly,
+                typeof(QuireBundle).Assembly,
                 typeof(ProjectBuilder).Assembly
             }
 
             )
                 foreach (var r in assembly.GetReferencedAssemblies())
-                    Check.True(r.Name == "Quire.Package" || r.Name!.StartsWith("System", StringComparison.Ordinal) || r.Name == "Microsoft.CSharp", r.FullName);
-            Check.Equal(2, typeof(PackageSet).Assembly.GetManifestResourceNames().Count(x => x.Contains("LICENSE", StringComparison.Ordinal)));
+                    Check.True(r.Name is "Quire" || r.Name!.StartsWith("System", StringComparison.Ordinal) ||
+                        r.Name is "Microsoft.CSharp" or "Microsoft.Win32.Primitives", r.FullName);
+            Check.Equal(2, typeof(QuireBundle).Assembly.GetManifestResourceNames().Count(x => x.Contains("LICENSE", StringComparison.Ordinal)));
         });
         Test("multiple packages share Tag/time; duplicate source mapping fails", async () =>
         {
@@ -414,7 +451,7 @@ internal static class Suite
             File.AppendAllText(f.ProjectPath, "  - name: second\n    sources:\n      - directory: ./input\n        prefix: other/data\n");
             var tag = await f.Build();
             Check.Equal(2, tag.Outputs.Length);
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 Check.Equal(2, set.Packages.Count);
                 Check.True(set.Packages.All(p => p.TagId == tag.TagId && p.BuildTimeUtc == tag.BuildTimeUtc));
@@ -432,7 +469,7 @@ internal static class Suite
             f.Put("😀", [2]);
             f.Text("😀.meta", "a=1");
             var a = await f.Build();
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 using var x = set.Read("common/data/😀");
                 Check.Bytes([2], x.Data.Span);
@@ -442,7 +479,7 @@ internal static class Suite
             f.Text("😀.meta", "");
             var b = await f.Build(a.TagId);
             Check.Equal(1, b.MetadataChanges);
-            using (var set = PackageSet.Open(f.Output))
+            using (var set = QuireBundle.Open(f.Output))
             {
                 Check.True(set.GetFileInfo("common/data/😀").HasMetadata);
                 Check.Equal(0, set.ReadMetadata("common/data/😀").Count);
@@ -469,9 +506,10 @@ internal static class Suite
             var tag = await f.Build();
             string file = Path.Combine(f.Root, tag.Outputs[0]);
             byte[] disk = File.ReadAllBytes(file);
-            disk[^1] ^= 1;
+            var header = PackageHeader.Decode(disk, disk.Length);
+            disk[checked((int)header.PayloadEnd - 1)] ^= 1;
             File.WriteAllBytes(file, disk);
-            using var set = PackageSet.Open(f.Output, f.ReadOptions);
+            using var set = QuireBundle.Open(f.Output, f.ReadOptions);
             await Check.ThrowsAsync<CryptographicException>(async () =>
             {
                 using var ignored = await set.ReadAsync("common/data/a");
@@ -513,7 +551,7 @@ internal static class Suite
                         }
 
                         await f.Build();
-                        using var set = PackageSet.Open(f.Output, f.ReadOptions with
+                        using var set = QuireBundle.Open(f.Output, f.ReadOptions with
                         {
                             MaxResidentIndexBytes = 0,
                             PageCacheBytes = 196608
@@ -530,7 +568,7 @@ internal static class Suite
                         stream.Seek(-1, SeekOrigin.End);
                         Check.Equal(46, stream.ReadByte());
                         Check.Equal(-1, stream.ReadByte());
-                        using var mapped = PackageSet.Open(f.Output, f.ReadOptions with
+                        using var mapped = QuireBundle.Open(f.Output, f.ReadOptions with
                         {
                             ReadMode = AssetReadMode.MemoryMapped
                         });

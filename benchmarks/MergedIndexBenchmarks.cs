@@ -4,7 +4,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
-using Quire.Package;
+using Quire.Cli.Tags;
+using Quire;
 
 internal static class MergedIndexBenchmarks
 {
@@ -39,7 +40,7 @@ internal static class MergedIndexBenchmarks
             }
 
             string yaml = Path.Combine(root, "quire.project.yml");
-            File.WriteAllText(yaml, "version: 1\noutput: ./dist\ncompression: false\npackages:\n  - name: data\n    sources:\n      - directory: ./input\n        prefix: data\n");
+            File.WriteAllText(yaml, "version: 1\nproject: benchmark\noutput: ./dist/{tag}\ncompression: none\npackages:\n  - name: data\n    sources:\n      - directory: ./input\n        prefix: data\n");
             var config = ProjectConfig.Load(yaml);
             var buildOptions = new BuildOptions
             {
@@ -61,7 +62,8 @@ internal static class MergedIndexBenchmarks
                     File.WriteAllText(Path.Combine(input, paths[metadataIndex][5..]) + ".meta", $"id={metadataIndex}\nrevision={layer}\n");
                 }
 
-                tag = await ProjectBuilder.BuildAsync(config, tag.TagId, buildOptions, default);
+                TagStore.Commit(config.StateDirectory, tag.TagId);
+                tag = await ProjectBuilder.BuildAsync(config, null, buildOptions, default);
                 if (tag.ContentChanges != 128 || tag.MetadataChanges != 128)
                 {
                     throw new InvalidDataException("The index benchmark patch must contain both content and metadata-only overrides.");
@@ -103,7 +105,7 @@ internal static class MergedIndexBenchmarks
                         PageCacheBytes = 8 * 1024 * 1024,
                         ReadMode = AssetReadMode.MemoryMapped
                     };
-                    using (var warm = PackageSet.Open(output, options))
+                    using (var warm = QuireBundle.Open(output, options))
                     {
                         _sink = warm.Packages.Count;
                     }
@@ -116,7 +118,7 @@ internal static class MergedIndexBenchmarks
                         long cpuStart = process.TotalProcessorTime.Ticks;
                         long start = Stopwatch.GetTimestamp();
                         long allocated = GC.GetAllocatedBytesForCurrentThread();
-                        using var opened = PackageSet.Open(output, options);
+                        using var opened = QuireBundle.Open(output, options);
                         allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
                         double milliseconds = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                         double cpuMilliseconds = (process.TotalProcessorTime.Ticks - cpuStart) / (double)TimeSpan.TicksPerMillisecond;
@@ -124,7 +126,7 @@ internal static class MergedIndexBenchmarks
                         Console.WriteLine($"{storage}/{mode} open #{round + 1}: {milliseconds:F3} ms, {allocated:N0} B allocated, {opened.IndexInfo.MemoryBytes:N0} B index");
                     }
 
-                    using var set = PackageSet.Open(output, options);
+                    using var set = QuireBundle.Open(output, options);
                     if (set.Packages.Count != PackageCount || set.IndexInfo.IsMerged != (mode == AssetIndexMode.Merged) || set.IndexInfo.IsFallback)
                     {
                         throw new InvalidDataException("Unexpected package count or effective index mode.");
@@ -333,7 +335,7 @@ internal static class MergedIndexBenchmarks
             }
 
             object fallback;
-            using (var limited = PackageSet.Open(output, new ReadOptions { IndexMode = AssetIndexMode.Auto, MaxMergedIndexBytes = 0 }))
+            using (var limited = QuireBundle.Open(output, new ReadOptions { IndexMode = AssetIndexMode.Auto, MaxMergedIndexBytes = 0 }))
             {
                 if (limited.IndexInfo.IsMerged || !limited.IndexInfo.IsFallback)
                 {
@@ -370,7 +372,7 @@ internal static class MergedIndexBenchmarks
                 Opening = "After one warmup open for each configuration, three separate opens include package validation and index construction, but exclude Dispose. OS cache remains warm.",
                 Allocation = "Managed allocation on the calling thread, including enumeration result strings. IndexInfo.MemoryBytes is the reported retained merged-index payload; it is not total process memory or package page-cache memory.",
                 Cpu = "Process CPU elapsed per batch; short operations can round to zero at the OS CPU-time resolution.",
-                LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(PackageSet).Assembly.Location))),
+                LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(QuireBundle).Assembly.Location))),
                 IndexDiagnostics = diagnostics,
                 Openings = openings,
                 Measurements = measurements,

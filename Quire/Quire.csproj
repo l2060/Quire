@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageId>Quire</PackageId>
+    <Description>Immutable asset packages with directory loading, typed metadata and concurrent readers.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/l2060/Quire</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/l2060/Quire</PackageProjectUrl>
+    <Title>Quire</Title>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Version>1.0.1</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quire.Cli" />
+    <InternalsVisibleTo Include="Quire.Tests" />
+    <InternalsVisibleTo Include="Quire.Benchmarks" />
+    <Compile Include="../Lz4/**/*.cs" Link="ThirdParty/Lz4/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../Lz4/LICENSE.*.txt" />
+    <None Include="../Lz4/LICENSE.*.txt" Pack="true" PackagePath="licenses/Lz4/" />
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+    <None Include="..\icon.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+</Project>

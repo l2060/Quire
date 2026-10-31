@@ -1,4 +1,4 @@
-using Quire.Package.Internal;
+using Quire.Internal;
 
 namespace Quire.Cli.Progress;
 

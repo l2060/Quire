@@ -1,5 +1,5 @@
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 internal static class EnumerationMergeTests
 {
@@ -57,7 +57,7 @@ internal static class EnumerationMergeTests
                 previous = await fixture.Build(previous.TagId);
             }
 
-            var expected = paths.Select(path => new AssetInfo("common/data/" + path, new FileInfo(Path.Combine(fixture.Input, path)).Length, File.Exists(Path.Combine(fixture.Input, path + ".meta")))).OrderBy(info => info.Path, AssetPath.Comparer).ToArray();
+            var expected = paths.Select(path => new AssetEntryInfo("common/data/" + path, AssetEntryKind.File, new FileInfo(Path.Combine(fixture.Input, path)).Length, File.Exists(Path.Combine(fixture.Input, path + ".meta")))).OrderBy(info => info.Path, AssetPath.Comparer).ToArray();
             foreach (var options in new[]
             {
                 new ReadOptions(),
@@ -70,7 +70,7 @@ internal static class EnumerationMergeTests
 
             )
             {
-                using var set = PackageSet.Open(fixture.Output, options);
+                using var set = QuireBundle.Open(fixture.Output, options);
                 Check.Equal(7, set.Packages.Count);
                 var actualFiles = set.EnumerateFiles().ToArray();
                 if (!expected.SequenceEqual(actualFiles))

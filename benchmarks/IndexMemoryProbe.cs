@@ -1,7 +1,7 @@
+using Quire.Internal;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Quire.Package.Internal;
 
 internal static class IndexMemoryProbe
 {

@@ -1,4 +1,5 @@
-using Quire.Package;
+using Quire;
+using Quire.Internal;
 
 internal static class ReaderTests
 {
@@ -6,10 +7,11 @@ internal static class ReaderTests
     private const int BlockSize = 256 * 1024;
     internal static void Register(Action<string, Func<Task>> test)
     {
-        foreach (bool compression in new[]
+        foreach (var compression in new[]
         {
-            false,
-            true
+            CompressionAlgorithm.None,
+            CompressionAlgorithm.Lz4,
+            CompressionAlgorithm.Zlib
         }
 
         )
@@ -22,11 +24,11 @@ internal static class ReaderTests
 
             )
             {
-                bool compressed = compression;
+                var algorithm = compression;
                 bool encrypted = encryption;
-                test($"reusable positional reader and direct block decoding, LZ4={compressed}, AES={encrypted}", async () =>
+                test($"reusable positional reader and direct block decoding, compression={algorithm}, AES={encrypted}", async () =>
                 {
-                    using var fixture = new Fixture(compressed, encrypted);
+                    using var fixture = new Fixture(algorithm, encrypted);
                     byte[] expected = new byte[3 * BlockSize + 12345];
                     var random = new Random(274);
                     random.NextBytes(expected.AsSpan(BlockSize, BlockSize));
@@ -44,12 +46,12 @@ internal static class ReaderTests
 
                     )
                     {
-                        using var packages = await PackageSet.OpenAsync(fixture.Output, fixture.ReadOptions with
+                        using var packages = await QuireBundle.OpenAsync(fixture.Output, fixture.ReadOptions with
                         {
                             ReadMode = mode
                         });
                         using var reader = packages.OpenRead(Path);
-                        Check.Equal(new AssetInfo(Path, expected.Length, true), reader.Info);
+                        Check.Equal(new AssetEntryInfo(Path, AssetEntryKind.File, expected.Length, true), reader.Info);
                         Check.Equal((long)expected.Length, reader.Length);
                         reader.Position = 19;
                         byte[] actual = new byte[expected.Length];
@@ -152,7 +154,7 @@ internal static class ReaderTests
 
             )
             {
-                using var packages = PackageSet.Open(fixture.Output, new ReadOptions { ReadMode = mode });
+                using var packages = QuireBundle.Open(fixture.Output, new ReadOptions { ReadMode = mode });
                 byte[] buffer = new byte[64];
                 for (int i = 0; i < 2048; i++)
                 {

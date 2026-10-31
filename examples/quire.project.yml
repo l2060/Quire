@@ -1,43 +1,66 @@
-# API 示例配置；完整多源编排模板可通过 quire-cli init 生成。
-# 相对目录以本文件所在目录为基准；索引固定存入 .quire/。
+# API 示例配置；完整多源编排模板可通过 quire-cli init PROJECT 生成。
+# 相对目录默认以本文件所在目录为基准；索引存入 .quire/<project>/。
+# package / diff 的 -root DIRECTORY 仅覆盖相对资源目录基准，绝对资源路径不变。
+# -root 自身的相对路径按命令执行目录解析；output 和索引位置不受影响。
 # 可选；默认 1，目前只支持 1。
 version: 1
-# 可选；默认 ./dist；产物位于 <output>/<TagID>/<包名>.asset。
+# 必填；同目录配置设置相同 project 时共用基线和 Tag 历史。
+project: example
+# 可选；默认 ./dist，直接指定最终目录；产物位于 <output>/<包名>.<suffix>。
+# 不自动追加 Tag 子目录；支持下方 name 的同一组变量，共用本次 Tag 和时间。
+# 本例为平铺目录和静态包名；后续生成同名文件会报错，不覆盖已有文件。
+# 保留历史产物可改为 ./dist/{tag}，或保持平铺目录并改为动态 name。
+# 动态目录建议位于固定父目录下，例如 ./dist/{tag}；无关输出文件保留。
+# package 创建候选；测试通过后 commit <Tag名称> 才推进正式基线。
 output: ./dist
-# 可选；默认 true，启用 LZ4；false 表示不压缩。
-compression: true
+# 可选；默认 asset；也可写 .asset。
+suffix: asset
+# 可选；默认 lz4；可选 none（不压缩）、lz4、zlib；每个包可独立覆盖。
+compression: lz4
+# 可选；默认 adaptive；可选 adaptive、always；每个包可独立覆盖。
+# adaptive 仅保留更小的压缩块；always 即使变大也保存压缩结果；none 时不生效。
+compression-policy: adaptive
 # 整段可选，字段省略时使用各自默认值。
 build:
-  # 可选；默认 128 MiB，整数范围 8–65536，须足以容纳 -jobs 所需工作缓冲。
+  # 可选；默认 0，根据 CPU 数和内存预算自动选择；-jobs 可覆盖。
+  jobs: 0
+  # 可选；默认 128 MiB，范围 8–65536；管线缓冲按每线程 7 块另加公共预留估算。
+  # 须足以容纳显式 jobs 所需缓冲；不是进程总内存或 zlib 原生分配的硬上限。
   memory-mib: 128
   # 可选；默认 262144 字节；支持 65536、131072、262144、524288、1048576。
-  # 修改块大小会重新打包相关资源。
+  # 只影响新写入内容，不会重打未变化的资源。
   block-size: 262144
-# 整段可选；默认不加密。
-encryption:
-  # 可选；默认 false。true 启用 AES-256-GCM，需要非空密码。
-  enabled: true
-  # 可选；默认 QUIRE_KEY，填写变量名；-pwd/-pwd-env 可覆盖此来源。
-  # enabled=false 时忽略此字段，不需要设置环境变量。
-  key-environment: QUIRE_KEY
-# 必填；至少一个包，无默认值。
+# 可选；默认 none，不加密、不签名；本例引用全局密钥 example，启用加密并签名。
+# 先执行 quire-cli keys add example PASSWORD；密钥独立于项目和当前目录。
+# 指定名称必须存在；YAML 不接受 encryption 或密码字段。
+secret-key: example
+
+# 必填；至少一个包。包名及 output 支持 Tag 与日期时间变量。
 packages:
-  # 必填；唯一包名，无默认值，允许 1–80 个 ASCII 字母、数字、连字符或下划线。
+  # 必填；无默认值；本例保留 common，也可用 "Patch-{tag}-{date}_{time}"。
+  # 区分大小写的变量：{tag}、{tagid}、{yyyy}、{MM}、{dd}、{HH}、{mm}、{ss}、{fff}、
+  # {date}=yyyyMMdd、{time}=HHmmss、{timestamp}=Unix 秒。tagid 为内部 8 位小写 hex。
+  # 日期时间使用本次构建统一冻结的本地时间和固定数字格式；变量值不递归展开。
+  # 未知变量报错；组合写为 {yyyy}{MM}{dd}，不支持 {yyyyMMdd} 或 | 任选语法。
+  # 展开后须为合法单个文件名组件，允许 Unicode、点、内部空格及开头的 -。
+  # 禁止路径分隔符、Windows 文件名非法字符、控制字符、设备保留名、首尾空白或末尾点。
+  # 完整 <包名>.<suffix> 最多 255 个 UTF-8 字节，展开后须不区分大小写唯一。
+  # package 扫描前校验展开结果；diff 保留模板；动态名称不会重打未变资源。
   - name: common
-    # sources 必填且非空；本包省略 compression，继承全局 true。
+    # sources 必填且非空；本包分别继承全局 lz4 和 adaptive。
     sources:
-      # directory 必填，无默认值；打包前必须存在。
+      # directory 必填，无默认值；打包前必须存在，相对路径按 -root 或本文件所在目录解析。
       - directory: ./assets/common
         # 可选；默认空字符串；支持多级目录，将 settings.txt 映射到 common/data/ 下。
         prefix: common/data
         # include/exclude 可选；省略时包含全部资源且没有额外排除，.assetignore 仍生效。
   # 必填；第二个唯一包名，无默认值，对应 locale.asset。
   - name: locale
-    # 可选；默认继承全局 true；本例覆盖为 false。
-    compression: false
+    # 可选；默认继承全局 lz4；本例覆盖为 none，关闭本包压缩。
+    compression: none
     # 必填；至少一个源目录，无默认值。
     sources:
-      # 必填；无默认值，相对本文件的目录。
+      # 必填；无默认值，相对 -root 或本文件所在目录；绝对路径不受 -root 影响。
       - directory: ./assets/locale
         # 可选；默认空字符串；本例将 welcome.txt 映射为 strings/welcome.txt。
         prefix: strings

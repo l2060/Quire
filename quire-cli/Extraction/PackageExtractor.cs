@@ -1,7 +1,7 @@
 using Quire.Cli.Configuration;
 using Quire.Cli.Sources;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire;
+using Quire.Internal;
 
 namespace Quire.Cli.Extraction;
 
@@ -28,7 +28,7 @@ internal static class PackageExtractor
             {
                 Progress = progress
             };
-        using var packages = await PackageSet.OpenAsync(source, options, token).ConfigureAwait(false);
+        using var packages = await QuireBundle.OpenAsync(source, options, token).ConfigureAwait(false);
         if (packages.Packages.Count == 0)
             throw new InvalidDataException($"No .asset packages found in '{source}'.");
         if (progress is not null)

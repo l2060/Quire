@@ -3,8 +3,9 @@ using Quire.Cli.Build;
 using Quire.Cli.Extraction;
 using Quire.Cli.Progress;
 using Quire.Cli.Sources;
-using Quire.Package;
-using Quire.Package.Internal;
+using Quire.Cli.Tags;
+using Quire;
+using Quire.Internal;
 
 internal static class ProgressTests
 {
@@ -43,7 +44,7 @@ internal static class ProgressTests
                 Check.True(build.ReadBytes >= 2L * length, "Packaging must count both hash and writer source reads.");
                 Check.True(build.WrittenBytes > 0);
                 var verify = new RecordingProgress();
-                using (var packages = await PackageSet.OpenAsync(f.Output, f.ReadOptions with { Progress = verify }))
+                using (var packages = await QuireBundle.OpenAsync(f.Output, f.ReadOptions with { Progress = verify }))
                     await packages.VerifyAsync();
                 AssertCompleted(verify);
                 AssertStreaming(verify.Stage("Verifying"));
@@ -74,14 +75,16 @@ internal static class ProgressTests
             var first = await f.Build(baseline.TagId);
             f.Text("a.meta", "version=2");
             var meta = new RecordingProgress();
-            var patch = await ProjectBuilder.BuildAsync(f.Config(), first.TagId, f.BuildOptions, null, default, meta);
+            TagStore.Commit(f.Config().StateDirectory, first.TagId);
+            var patch = await ProjectBuilder.BuildAsync(f.Config(), null, f.BuildOptions, null, default, meta);
             Check.Equal(1, patch.MetadataChanges);
             Check.Equal(0, patch.ContentChanges);
             AssertCompleted(meta);
             Check.Equal((long)PropertyMetadata.Parse("version=2").Length, meta.Stage("Writing").TotalBytes);
             Check.Equal(1L, meta.Stage("Writing").TotalFiles);
             var unchanged = new RecordingProgress();
-            var noChange = await ProjectBuilder.BuildAsync(f.Config(), patch.TagId, f.BuildOptions, null, default, unchanged);
+            TagStore.Commit(f.Config().StateDirectory, patch.TagId);
+            var noChange = await ProjectBuilder.BuildAsync(f.Config(), null, f.BuildOptions, null, default, unchanged);
             Check.Equal(0, noChange.Outputs.Length);
             AssertCompleted(unchanged);
             Check.Equal(0L, unchanged.Stage("Writing").TotalFiles);
@@ -94,7 +97,7 @@ internal static class ProgressTests
             )
             {
                 var verify = new RecordingProgress();
-                using var packages = await PackageSet.OpenAsync(f.Output, f.ReadOptions with { Progress = verify });
+                using var packages = await QuireBundle.OpenAsync(f.Output, f.ReadOptions with { Progress = verify });
                 if (synchronous)
                     packages.Verify();
                 else
@@ -134,7 +137,7 @@ internal static class ProgressTests
             bytes[^1] ^= 1;
             File.WriteAllBytes(path, bytes);
             var verify = new RecordingProgress();
-            using (var packages = await PackageSet.OpenAsync(f.Output, f.ReadOptions with { Progress = verify }))
+            using (var packages = await QuireBundle.OpenAsync(f.Output, f.ReadOptions with { Progress = verify }))
                 await Check.ThrowsAsync<InvalidDataException>(() => packages.VerifyAsync());
             Check.Equal(0L, verify.Stage("Verifying").Files);
             Check.True(verify.Stage("Verifying").Bytes > 0);
@@ -195,9 +198,8 @@ internal static class ProgressTests
                 "Write",
                 "1.0 MiB",
                 "512.0 KiB",
-                "/s",
                 "Elapsed",
-                "ETA 00:00"
+                "Stage ETA"
             }
 
             )
@@ -273,7 +275,7 @@ internal static class ProgressTests
                 Console.SetError(status);
                 foreach (string[] command in new string[][]
                 {
-                    ["package", "-project", f.ProjectPath],
+                    ["package", "-f", f.ProjectPath],
                     ["verify", f.Output],
                     ["unpackage", f.Output, Path.Combine(f.Root, "unpacked")]
                 }
@@ -288,13 +290,14 @@ internal static class ProgressTests
                     foreach (string metric in new[]
                     {
                         "Read",
-                        "Write",
-                        "ETA",
+                        "Stage ETA",
                         "Done"
                     }
 
                     )
                         Check.True(status.ToString().Contains(metric, StringComparison.Ordinal), $"{command[0]} did not report {metric} to stderr.");
+                    if (command[0] != "verify")
+                        Check.True(status.ToString().Contains("Write", StringComparison.Ordinal), $"{command[0]} did not report written bytes to stderr.");
                 }
 
                 string package = Directory.EnumerateFiles(f.Output, "*.asset", SearchOption.AllDirectories).Single();

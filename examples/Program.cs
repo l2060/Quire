@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Text;
-using System.Threading.Tasks;
-using Quire.Package;
 
-namespace Quire.Package.Examples
+namespace Quire.Examples
 {
     internal static class Program
     {
@@ -19,48 +14,71 @@ namespace Quire.Package.Examples
             arguments = new string[]
             {
                 "D:\\SourceCode\\Quire\\examples\\dist\\22df3eb9276944b4995bdff6ad67c678\\",
-                "123456"
+                "D:\\SourceCode\\Quire\\examples\\client.key"
             };
 
             if (arguments.Length < 1 || arguments.Length > 2)
             {
-                Console.WriteLine("Usage: Quire.Package.Examples PACKAGE_DIRECTORY [PASSWORD]");
+                Console.WriteLine("Usage: Quire.Examples PACKAGE_DIRECTORY [CLIENT_KEY_FILE]");
                 return 1;
             }
 
-            string? password = null;
+            AssetKey? key = null;
             if (arguments.Length == 2)
             {
-                password = arguments[1];
+                key = new AssetKey(File.ReadAllBytes(arguments[1]));
             }
 
             ReadOptions readOptions = new ReadOptions
             {
-                Password = password
+                Key = key
             };
 
             // 1. 打开目录：递归发现 .asset，并按打包时间合并基础包与补丁。
-            using (PackageSet packageSet = await PackageSet.OpenAsync(arguments[0], readOptions))
+            using (QuireBundle QuireBundle = await QuireBundle.OpenAsync(arguments[0], readOptions))
             {
-                foreach (AssetInfo assetInfo in packageSet.EnumerateFiles())
+                foreach (AssetEntryInfo assetInfo in QuireBundle.EnumerateFiles())
                 {
                     Console.WriteLine($"{assetInfo.Path}: {assetInfo.Length} bytes, meta={assetInfo.HasMetadata}");
                 }
 
-                foreach (string directoryPath in packageSet.EnumerateDirectories(string.Empty, recursive: false))
+                foreach (string directoryPath in QuireBundle.EnumerateDirectories(string.Empty, recursive: false))
                 {
                     Console.WriteLine($"Directory: {directoryPath}");
                 }
 
+                // 文件浏览器：一次取得当前层级的完整数组，根目录使用 string.Empty。
+                AssetEntryInfo[] rootEntries = QuireBundle.Dir(string.Empty);
+                foreach (AssetEntryInfo entry in rootEntries)
+                {
+                    Console.WriteLine($"Root {entry.Kind}: {entry.Path}");
+                }
+
+                // 异步版本在分页索引读取时使用异步 I/O，也可传入 CancellationToken。
+                AssetEntryInfo[] entries = await QuireBundle.DirAsync("common/data");
+                foreach (AssetEntryInfo entry in entries)
+                {
+                    if (entry.IsDirectory)
+                        Console.WriteLine($"Browse directory: {entry.Path}");
+                    else
+                        Console.WriteLine($"Browse file: {entry.Path}, {entry.Length} bytes, meta={entry.HasMetadata}");
+                }
+
+                // 可选流式 API：适合逐项处理或提前停止，不预先分配完整数组。
+                await foreach (AssetEntryInfo entry in QuireBundle.EnumerateEntriesAsync("common/data"))
+                {
+                    Console.WriteLine($"Stream {entry.Kind}: {entry.Path}");
+                }
+
                 const string assetPath = "common/data/settings.txt";
-                if (!packageSet.FileExists(assetPath))
+                if (!QuireBundle.FileExists(assetPath))
                 {
                     Console.Error.WriteLine($"The example needs '{assetPath}'. Package examples/quire.project.yml first.");
                     return 1;
                 }
 
                 // 2. 读取可选 Meta：属性不存在或类型不匹配时 TryGet 返回 false，不抛异常。
-                Metadata metadata = await packageSet.ReadMetadataAsync(assetPath);
+                Metadata metadata = await QuireBundle.ReadMetadataAsync(assetPath);
                 if (metadata.TryGetString("name", out string? name))
                 {
                     Console.WriteLine($"Name: {name}");
@@ -115,7 +133,7 @@ namespace Quire.Package.Examples
                 }
 
                 // 3. 小文件一次读入：AssetData 持有池化缓冲，使用后 Dispose。
-                using (AssetData fileData = await packageSet.ReadAsync(assetPath))
+                using (AssetData fileData = await QuireBundle.ReadAsync(assetPath))
                 {
                     Console.WriteLine(Encoding.UTF8.GetString(fileData.Data.Span));
                 }
@@ -123,7 +141,7 @@ namespace Quire.Package.Examples
                 // 4. 延迟加载完整数据：创建 Lazy 时不读内容，首次访问 Value 才开始读取。
                 Lazy<Task<AssetData>> deferredFileData = new Lazy<Task<AssetData>>(() =>
                 {
-                    return packageSet.ReadAsync(assetPath).AsTask();
+                    return QuireBundle.ReadAsync(assetPath).AsTask();
                 });
 
                 Console.WriteLine($"Content requested: {deferredFileData.IsValueCreated}");
@@ -136,19 +154,19 @@ namespace Quire.Package.Examples
 
                 // 5. 大文件按需读取：OpenRead 不读取内容；ReadAsync 只加载需要的块。
                 byte[] prefixBuffer = new byte[16];
-                using (Stream assetStream = packageSet.OpenRead(assetPath))
+                using (Stream assetStream = QuireBundle.OpenRead(assetPath))
                 {
                     int prefixBytesRead = await assetStream.ReadAsync(prefixBuffer);
                     Console.WriteLine($"First {prefixBytesRead} bytes: {Convert.ToHexString(prefixBuffer.AsSpan(0, prefixBytesRead))}");
 
                     // 范围读取不依赖流的位置；多个调用可以并行读取同一资源。
                     byte[] tailBuffer = new byte[Math.Min(8L, assetStream.Length)];
-                    await packageSet.ReadAtAsync(assetPath, assetStream.Length - tailBuffer.Length, tailBuffer);
+                    await QuireBundle.ReadAtAsync(assetPath, assetStream.Length - tailBuffer.Length, tailBuffer);
                     Console.WriteLine($"Tail: {Convert.ToHexString(tailBuffer)}");
                 }
 
                 // 高频范围读取复用同一读取器，不改变流位置。
-                using (AssetReader reusableReader = packageSet.OpenRead(assetPath))
+                using (AssetReader reusableReader = QuireBundle.OpenRead(assetPath))
                 {
                     int prefixBytesRead = reusableReader.ReadAt(0, prefixBuffer);
                     Console.WriteLine($"Reusable reader: {prefixBytesRead} bytes, position={reusableReader.Position}");

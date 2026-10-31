@@ -1,10 +1,12 @@
+using Quire.Internal;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Quire.Cli.Build;
 using Quire.Cli.Configuration;
-using Quire.Package;
+using Quire.Cli.Tags;
+using Quire;
 
 internal static class HotPathBenchmarks
 {
@@ -17,8 +19,7 @@ internal static class HotPathBenchmarks
         string root = Path.Combine(Path.GetTempPath(), "quire-hot-paths-" + Guid.NewGuid().ToString("N"));
         string input = Path.Combine(root, "input");
         Directory.CreateDirectory(input);
-        string variable = "QUIRE_HOT_PATH_PASSWORD_" + Guid.NewGuid().ToString("N");
-        Environment.SetEnvironmentVariable(variable, "benchmark-password");
+        using var signing = PublisherKey.Import(RandomNumberGenerator.GetBytes(64));
         var measurements = new List<HotPathMeasurement>();
         var openings = new List<object>();
         try
@@ -59,7 +60,7 @@ internal static class HotPathBenchmarks
                     string profileRoot = Path.Combine(root, profile);
                     Directory.CreateDirectory(profileRoot);
                     string yaml = Path.Combine(profileRoot, "quire.project.yml");
-                    File.WriteAllText(yaml, $"version: 1\noutput: ./dist\ncompression: {compressed.ToString().ToLowerInvariant()}\nencryption:\n  enabled: {encrypted.ToString().ToLowerInvariant()}\n  key-environment: {variable}\npackages:\n  - name: data\n    sources:\n      - directory: ../input\n        prefix: data\n");
+                    File.WriteAllText(yaml, $"version: 1\nproject: benchmark\noutput: ./dist/{{tag}}\ncompression: {(compressed ? "lz4" : "none")}\ncompression-policy: adaptive\nsecret-key: {(encrypted ? "benchmark" : "none")}\npackages:\n  - name: data\n    sources:\n      - directory: ../input\n        prefix: data\n");
                     // Reset metadata because the same source tree is reused between profiles.
                     for (int i = 0; i < FileCount; i += 64)
                         File.WriteAllText(Path.Combine(input, paths[i][5..]) + ".meta", $"id={i}\nrevision=0\n");
@@ -69,10 +70,11 @@ internal static class HotPathBenchmarks
                         Jobs = 4,
                         IoConcurrency = 4
                     };
-                    var baseline = await ProjectBuilder.BuildAsync(config, null, buildOptions, default);
+                    var baseline = await ProjectBuilder.BuildAsync(config, null, buildOptions, encrypted ? signing : null, default);
+                    TagStore.Commit(config.StateDirectory, baseline.TagId);
                     for (int i = 0; i < FileCount; i += 64)
                         File.WriteAllText(Path.Combine(input, paths[i][5..]) + ".meta", $"id={i}\nrevision=1\n");
-                    await ProjectBuilder.BuildAsync(config, baseline.TagId, buildOptions, default);
+                    await ProjectBuilder.BuildAsync(config, null, buildOptions, encrypted ? signing : null, default);
                     foreach (var mode in new[]
                     {
                         AssetReadMode.RandomAccess,
@@ -83,12 +85,12 @@ internal static class HotPathBenchmarks
                     {
                         var options = new ReadOptions
                         {
-                            Password = encrypted ? "benchmark-password" : null,
+                            Key = encrypted ? signing.ClientKey : null,
                             ReadMode = mode
                         };
                         long openingStart = Stopwatch.GetTimestamp();
                         long openingAllocation = GC.GetAllocatedBytesForCurrentThread();
-                        using var set = PackageSet.Open(Path.Combine(profileRoot, "dist"), options);
+                        using var set = QuireBundle.Open(Path.Combine(profileRoot, "dist"), options);
                         openingAllocation = GC.GetAllocatedBytesForCurrentThread() - openingAllocation;
                         double openingMs = Stopwatch.GetElapsedTime(openingStart).TotalMilliseconds;
                         openings.Add(new
@@ -240,7 +242,7 @@ internal static class HotPathBenchmarks
                 EnumerationOperation = "One complete foreach traversal, including returned path strings. Repeated enumeration does not retain the results.",
                 ReusedReaderOperation = "One 256-byte positional read from a previously opened 4KiB file; block contents are warm and reader construction is excluded.",
                 LookupOperation = "FileExists followed by GetFileInfo for an existing file.",
-                LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(PackageSet).Assembly.Location))),
+                LibrarySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(QuireBundle).Assembly.Location))),
                 Openings = openings,
                 Measurements = measurements,
                 Checksum = _sink
@@ -250,7 +252,6 @@ internal static class HotPathBenchmarks
         }
         finally
         {
-            Environment.SetEnvironmentVariable(variable, null);
             string resolved = Path.GetFullPath(root);
             if (!ProjectConfig.Within(resolved, Path.GetFullPath(Path.GetTempPath())) || !Path.GetFileName(resolved).StartsWith("quire-hot-paths-", StringComparison.Ordinal))
                 throw new IOException("Unsafe benchmark cleanup.");

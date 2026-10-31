@@ -1,7 +1,7 @@
 <Solution>
-    <Project Path="Quire.Package/Quire.Package.csproj" />
+    <Project Path="benchmarks/Quire.Benchmarks.csproj" />
+    <Project Path="examples/Quire.Examples.csproj" />
     <Project Path="quire-cli/quire-cli.csproj" />
-    <Project Path="examples/Quire.Package.Examples.csproj" />
-    <Project Path="tests/Quire.Package.Tests.csproj" />
-    <Project Path="benchmarks/Quire.Package.Benchmarks.csproj" />
+    <Project Path="Quire/Quire.csproj" />
+    <Project Path="tests/Quire.Tests.csproj" />
 </Solution>
