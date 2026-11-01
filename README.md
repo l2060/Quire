@@ -463,6 +463,14 @@ CLI 也可发布为 Native AOT 可执行文件；例如 Windows x64，需要相�
 dotnet publish quire-cli/quire-cli.csproj -c Release -r win-x64 -p:PublishAot=true -p:GeneratePackageOnBuild=false -o artifacts/cli
 ```
 
+CLI 还能打成 .NET 10 的 RID 专用 Native AOT 工具包，安装方式不变：`dotnet tool install quire-cli` 会按平台自动选择 `linux-x64` / `win-x64` 包，其他平台回退到 `any` 框架依赖包。
+
+```bash
+packaging/pack-aot-tool.sh artifacts/aot-tool
+```
+
+Linux 上可直接生成 `linux-x64` 包；`win-x64` 需要 `lld-link` 以及 MSVC CRT、Windows SDK 库，通过 `AOT_WIN_CRT_LIB`、`AOT_WIN_SDK_LIB` 指定（跨操作系统 AOT 不受 .NET 官方支持，未配置时脚本跳过该平台）。
+
 ## 文档与示例
 
 | 文档 | 内容 |

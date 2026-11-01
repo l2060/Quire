@@ -8,6 +8,11 @@
 		<OptimizationPreference>Size</OptimizationPreference>
 		<StripSymbols>true</StripSymbols>
 		<ToolCommandName>quire-cli</ToolCommandName>
+		<!-- .NET 10 RID-specific AOT tool packages. The RID list is only set while packing AOT tools or the
+		     framework-dependent fallback, so regular builds keep producing the portable tool package. -->
+		<ToolPackageRuntimeIdentifiers Condition="'$(PublishAot)' == 'true' or '$(RuntimeIdentifier)' == 'any'">linux-x64;win-x64;any</ToolPackageRuntimeIdentifiers>
+		<_QuireNativeBinaryExt Condition="$(RuntimeIdentifier.StartsWith('win'))">.exe</_QuireNativeBinaryExt>
+		<ToolEntryPoint Condition="'$(PublishAot)' == 'true' and '$(RuntimeIdentifier)' != ''">quire-cli$(_QuireNativeBinaryExt)</ToolEntryPoint>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
 		<Description>Package assets from quire.project.yml and extract immutable asset packages.</Description>
@@ -32,6 +37,13 @@
 	  <ProjectReference Include="..\Quire\Quire.csproj" />
 	  <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
 	</ItemGroup>
+	<!-- NativeAOT publishes a separate .dbg/.pdb next to the executable; tool packages must not ship them. -->
+	<Target Name="RemoveNativeSymbolsFromToolPackage" BeforeTargets="PackToolImplementation" Condition="'$(_IsPacking)' == 'true' and '$(PublishAot)' == 'true'">
+		<ItemGroup>
+			<_QuireToolSymbolFiles Include="$(PublishDir)*.dbg;$(PublishDir)*.pdb" />
+		</ItemGroup>
+		<Delete Files="@(_QuireToolSymbolFiles)" />
+	</Target>
 	<Target Name="NameNativeExecutable" AfterTargets="CopyNativeBinary" Condition="'$(PublishAot)' == 'true'">
 		<Move SourceFiles="$(PublishDir)$(AssemblyName)$(NativeBinaryExt)" DestinationFiles="$(PublishDir)quire-cli$(NativeBinaryExt)" />
 	</Target>
