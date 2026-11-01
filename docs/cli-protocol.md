@@ -15,7 +15,7 @@ quire-cli verify ./dist/game -progress
 quire-cli keys list -progress
 ```
 
-`-progress` 是无参数开关，不接受 `-progress=true`。它适用于项目初始化、打包、查询、提交、删除候选、包读取和密钥管理；帮助命令仍输出普通帮助文本。
+`-progress` 是无参数开关，不接受 `-progress=true`。它适用于项目初始化、打包、查询、提交、删除候选、包读取和密钥管理；帮助和版本命令（`-h`、`--help`、`-v`、`--version`）仍输出普通文本。版本命令只打印一行版本号，不发送任何结构化事件。
 
 `init PROJECT [DIRECTORY]` 要求通过参数提供项目名，不读取交互输入。成功结果的 `path` 为生成的 `quire.<project>.yml` 绝对路径，后续命令将该路径传给 `-f`。配置中的 `project` 也为必填，缺失、空字符串或纯空白均报错；所有状态保存在 `.quire/<project>/`。`-f` 未指定时仍读取 `./quire.project.yml`。
 

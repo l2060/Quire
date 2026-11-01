@@ -103,6 +103,20 @@ internal static class CliTests
             foreach (string option in new[] { "-pwd", "-pwd-env", "-jobs" })
                 await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync(["diff", "-f", f.ProjectPath, option, "2"], default));
         });
+        test("CLI version switches print the build version and accept no arguments", async () =>
+        {
+            foreach (string option in new[] { "-v", "-version", "--version", "version" })
+                Check.Equal(CliVersion.Current + Environment.NewLine, await CaptureOutputAsync([option]));
+            Check.Equal(typeof(CommandLine).Assembly.GetName().Version!.ToString(3), CliVersion.Current.Split('-')[0]);
+            Check.True((await CaptureOutputAsync(["--help"])).Contains("-v, --version", StringComparison.Ordinal));
+            foreach (string[] arguments in new string[][]
+            {
+                ["-v", "-progress"],
+                ["--version", "extra"],
+                ["version", "1"]
+            })
+                await Check.ThrowsAsync<ArgumentException>(() => CommandLine.RunAsync(arguments, default));
+        });
         test("CLI named candidates retain internal IDs and require explicit commit", async () =>
         {
             using var f = new Fixture();

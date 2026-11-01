@@ -16,7 +16,7 @@
 		<PackageProjectUrl>https://github.com/l2060/Quire</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/l2060/Quire</RepositoryUrl>
 		<PackageIcon>icon.png</PackageIcon>
-		<Version>1.0.1</Version>
+		<Version>1.0.2</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<InternalsVisibleTo Include="Quire.Tests" />

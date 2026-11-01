@@ -408,8 +408,11 @@ quire-cli unpackage ./dist ./unpacked -key ./client.key
 | `verify DIRECTORY` | 完整校验资源包内容 |
 | `unpackage SOURCE DEST` | 解包合并后的资源与 Meta，目标目录须为空或不存在 |
 | `keys add/list/show/remove/export` | 管理当前用户的全局命名密钥；`show KEYNAME` 输出客户端密钥字符串 |
+| `-v, --version` | 输出当前 CLI 版本号 |
 
 构建及历史命令可通过 `-f FILE` 指定配置位置，默认 `./quire.project.yml`；`keys` 不接受 `-f`。仅 `package` / `diff` 支持 `-root DIRECTORY`，用于切换相对资源目录的基准。读取命令使用 `-key FILE` 和 `-suffix EXT`，不读取项目配置。`package` / `unpackage` 可用 `-jobs N` 指定工作线程数。
+
+`quire-cli -v` 只输出版本号本身（例如 `1.0.2`），便于脚本比较；同时接受 `-version`、`--version` 和 `version`，且不接受其他参数。
 
 完整用法：
 
@@ -446,10 +449,10 @@ dotnet run --project tests -c Release --no-build
 dotnet pack Quire.slnx -c Release --no-build -p:GeneratePackageOnBuild=false -o artifacts/packages
 ```
 
-生成 `Quire.1.0.0.nupkg` 与 `quire-cli.1.0.0.nupkg`。本地安装 CLI，例如：
+生成 `Quire.1.0.2.nupkg` 与 `quire-cli.1.0.2.nupkg`。本地安装 CLI，例如：
 
 ```powershell
-dotnet tool install quire-cli --tool-path ./artifacts/tools --add-source ./artifacts/packages --version 1.0.0
+dotnet tool install quire-cli --tool-path ./artifacts/tools --add-source ./artifacts/packages --version 1.0.2
 ```
 
 应用可把 `artifacts/packages` 配置为 NuGet 包源，或直接引用 `Quire/Quire.csproj`。版本号以实际生成的包为准。

@@ -32,7 +32,8 @@ internal static class CommandLine
 
     internal static bool UsesProgress(string[] args)
     {
-        if (args.Length == 0 || args[0] is "help" or "-help" or "--help" or "-h") return false;
+        if (args.Length == 0 || args[0] is "help" or "-help" or "--help" or "-h"
+            or "version" or "-version" or "--version" or "-v") return false;
         if (args[0] != "keys") return args.AsSpan(1).Contains("-progress");
         // A key password/destination may itself be '-progress'. Only an extra
         // trailing switch enables structured output for the positional key grammar.
@@ -81,8 +82,17 @@ internal static class CommandLine
                   -key FILE                   Package files: client key; required for signed packages.
                   -suffix EXT                 Package files: file extension (default: asset).
                   -progress                   Stream structured events for GUI/script integration.
+                  -v, --version               Show the version number.
                   -h, --help                  Show this help.
                 """);
+            return 0;
+        }
+
+        // Version is informational output like help: plain text, no structured events.
+        if (args[0] is "version" or "-version" or "--version" or "-v")
+        {
+            if (args.Length > 1) throw new ArgumentException("The version command accepts no arguments.");
+            Console.WriteLine(CliVersion.Current);
             return 0;
         }
 
